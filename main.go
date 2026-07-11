@@ -1,7 +1,12 @@
 package main
 
-import "fmt"
+import (
+	"fmt"
+
+	"github.com/bluram/advert-detect/internal/deps"
+)
 
 func main() {
-	fmt.Println("hello world")
+	deps.Verify()
+	fmt.Println("ffmpeg на месте, можно работать!")
 }
