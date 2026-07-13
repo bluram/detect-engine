@@ -40,7 +40,8 @@ func DefaultParams() Params {
 // Detection is one detected airing of the advert inside the recording.
 type Detection struct {
 	FrameOffset int
-	TimeSeconds float64
+	TimeSeconds float64 // start of the airing, seconds from recording start
+	EndSeconds  float64 // end of the airing (start + advert length)
 	Score       float64 // overall agreement at the peak (0..1)
 	WorstSecond float64 // weakest 1-second agreement within the match (0..1)
 	Confidence  string  // high | medium | review | low
@@ -74,9 +75,11 @@ func Find(record, advert *fingerprint.Fingerprint, p Params) ([]Detection, error
 		if worst < p.MinSecondScore {
 			continue
 		}
+		start := record.FrameToSeconds(peak)
 		detections = append(detections, Detection{
 			FrameOffset: peak,
-			TimeSeconds: record.FrameToSeconds(peak),
+			TimeSeconds: start,
+			EndSeconds:  start + advert.DurationSeconds(),
 			Score:       curve[peak],
 			WorstSecond: worst,
 			Confidence:  confidence(curve[peak], worst),

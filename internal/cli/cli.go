@@ -134,11 +134,13 @@ func printHuman(w io.Writer, opts options, detections []matcher.Detection, start
 
 	fmt.Fprintf(w, "  ✓ Found %d airing(s):\n\n", len(detections))
 	for i, d := range detections {
-		line := fmt.Sprintf("    %2d  at %s   score %.3f   worst/sec %.3f   %-7s",
-			i+1, formatTimestamp(d.TimeSeconds), d.Score, d.WorstSecond, d.Confidence)
+		line := fmt.Sprintf("    %2d  %s → %s  (%4.1fs)   score %.3f   worst/sec %.3f   %-7s",
+			i+1, formatTimestamp(d.TimeSeconds), formatTimestamp(d.EndSeconds),
+			d.EndSeconds-d.TimeSeconds, d.Score, d.WorstSecond, d.Confidence)
 		if start != nil {
-			clock := start.Add(time.Duration(d.TimeSeconds * float64(time.Second)))
-			line += "   " + clock.Format("2006-01-02 15:04:05")
+			from := start.Add(time.Duration(d.TimeSeconds * float64(time.Second)))
+			to := start.Add(time.Duration(d.EndSeconds * float64(time.Second)))
+			line += fmt.Sprintf("   %s → %s", from.Format("15:04:05"), to.Format("15:04:05"))
 		}
 		fmt.Fprintln(w, line)
 	}
@@ -147,12 +149,15 @@ func printHuman(w io.Writer, opts options, detections []matcher.Detection, start
 
 func printJSON(w io.Writer, opts options, detections []matcher.Detection, start *time.Time) {
 	type jsonDetection struct {
-		TimeSeconds float64 `json:"time_seconds"`
-		Timestamp   string  `json:"timestamp"`
-		Score       float64 `json:"score"`
-		WorstSecond float64 `json:"worst_second"`
-		Confidence  string  `json:"confidence"`
-		ClockTime   string  `json:"clock_time,omitempty"`
+		StartSeconds float64 `json:"start_seconds"`
+		EndSeconds   float64 `json:"end_seconds"`
+		Start        string  `json:"start"`
+		End          string  `json:"end"`
+		Score        float64 `json:"score"`
+		WorstSecond  float64 `json:"worst_second"`
+		Confidence   string  `json:"confidence"`
+		ClockStart   string  `json:"clock_start,omitempty"`
+		ClockEnd     string  `json:"clock_end,omitempty"`
 	}
 
 	out := struct {
@@ -164,14 +169,17 @@ func printJSON(w io.Writer, opts options, detections []matcher.Detection, start 
 
 	for _, d := range detections {
 		jd := jsonDetection{
-			TimeSeconds: round(d.TimeSeconds, 2),
-			Timestamp:   formatTimestamp(d.TimeSeconds),
-			Score:       round(d.Score, 4),
-			WorstSecond: round(d.WorstSecond, 4),
-			Confidence:  d.Confidence,
+			StartSeconds: round(d.TimeSeconds, 2),
+			EndSeconds:   round(d.EndSeconds, 2),
+			Start:        formatTimestamp(d.TimeSeconds),
+			End:          formatTimestamp(d.EndSeconds),
+			Score:        round(d.Score, 4),
+			WorstSecond:  round(d.WorstSecond, 4),
+			Confidence:   d.Confidence,
 		}
 		if start != nil {
-			jd.ClockTime = start.Add(time.Duration(d.TimeSeconds * float64(time.Second))).Format(time.RFC3339)
+			jd.ClockStart = start.Add(time.Duration(d.TimeSeconds * float64(time.Second))).Format(time.RFC3339)
+			jd.ClockEnd = start.Add(time.Duration(d.EndSeconds * float64(time.Second))).Format(time.RFC3339)
 		}
 		out.Detections = append(out.Detections, jd)
 	}
