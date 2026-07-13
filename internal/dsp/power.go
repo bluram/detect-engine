@@ -1,17 +1,23 @@
 package dsp
 
-// PowerSpectrum returns the energy at each frequency "bin" of one frame.
-// A frame of length N has N/2+1 bins, at frequencies 0, sr/N, 2*sr/N, ... up to
-// sr/2. Energy is the magnitude squared (magnitude * magnitude) — that is what
-// the mel-band step needs next.
-func PowerSpectrum(frame []float64, sampleRate int) []float64 {
+// PowerSpectrum returns the energy at each frequency bin of one frame, computed
+// with the FFT. A frame of length N (which must be a power of two) yields
+// N/2+1 bins; bin k corresponds to frequency k*sampleRate/N. Energy is the
+// squared magnitude of the complex FFT value.
+func PowerSpectrum(frame []float64) []float64 {
 	n := len(frame)
-	numBins := n/2 + 1
-	power := make([]float64, numBins)
-	for k := 0; k < numBins; k++ {
-		freq := float64(k) * float64(sampleRate) / float64(n)
-		mag := MatchFrequency(frame, sampleRate, freq)
-		power[k] = mag * mag
+
+	buf := make([]complex128, n)
+	for i, s := range frame {
+		buf[i] = complex(s, 0)
+	}
+	FFT(buf)
+
+	bins := n/2 + 1
+	power := make([]float64, bins)
+	for k := 0; k < bins; k++ {
+		re, im := real(buf[k]), imag(buf[k])
+		power[k] = re*re + im*im
 	}
 	return power
 }
