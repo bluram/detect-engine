@@ -2,31 +2,45 @@ package main
 
 import (
 	"fmt"
-	"math"
 	"strings"
 
-	"github.com/bluram/advert-detect/internal/deps"
+	"github.com/bluram/advert-detect/internal/audio"
 	"github.com/bluram/advert-detect/internal/dsp"
 )
 
 func main() {
-	deps.Verify()
-
 	sr := 22050
-	N := 4096
 
-	signal := make([]float64, N)
-	for n := range signal {
-		t := float64(n) / float64(sr)
-		signal[n] = math.Sin(2*math.Pi*240*t) + 0.5*math.Sin(2*math.Pi*880*t)
+	samples, err := audio.Decode("advert.mp3")
+	if err != nil {
+		fmt.Println("error:", err)
+		return
 	}
 
-	spectrum := dsp.Spectrum(signal, sr, 200, 1200, 40)
+	// cut into frames, then take ONE frame (~5th second) and fade its edges
+	frames := dsp.Frames(samples, 512, 256)
+	window := dsp.Hamming(512)
+	frame := dsp.ApplyWindow(frames[400], window)
 
-	fmt.Println("частота   сила")
-	for _, bin := range spectrum {
-		bar := strings.Repeat("#", int(bin.Strength*120))
-		fmt.Printf("  %4.0f Hz  %s\n", bin.Freq, bar)
+	// spectrum (prism) of this single frame
+	power := dsp.PowerSpectrum(frame, sr)
+
+	// find the biggest, to scale the bars
+	var max float64
+	for _, p := range power {
+		if p > max {
+			max = p
+		}
+	}
+	if max == 0 {
+		max = 1
 	}
 
+	// print the low bins (that is where most sound energy is)
+	fmt.Println("power spectrum of ONE frame:")
+	for k := 0; k < 60; k++ {
+		freq := float64(k) * float64(sr) / 512
+		bar := strings.Repeat("#", int(power[k]/max*50))
+		fmt.Printf("  %5.0f Hz  %s\n", freq, bar)
+	}
 }
