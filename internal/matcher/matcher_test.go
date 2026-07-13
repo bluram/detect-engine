@@ -50,6 +50,48 @@ func TestFindEmbeddedAdvert(t *testing.T) {
 	}
 }
 
+func TestPreparedRecordMatchesMultipleAdverts(t *testing.T) {
+	const bands, recFrames = 12, 600
+
+	record := &fingerprint.Fingerprint{SampleRate: 22050, HopSamples: 256}
+	record.Bits = make([][]int8, bands)
+	for b := 0; b < bands; b++ {
+		record.Bits[b] = make([]int8, recFrames)
+		for f := 0; f < recFrames; f++ {
+			record.Bits[b][f] = bitAt(b, f)
+		}
+	}
+
+	// two adverts of different lengths, embedded at different offsets.
+	sliceAt := func(offset, length int) *fingerprint.Fingerprint {
+		fp := &fingerprint.Fingerprint{SampleRate: 22050, HopSamples: 256, Bits: make([][]int8, bands)}
+		for b := 0; b < bands; b++ {
+			fp.Bits[b] = append([]int8(nil), record.Bits[b][offset:offset+length]...)
+		}
+		return fp
+	}
+	advertA := sliceAt(100, 80)
+	advertB := sliceAt(400, 50)
+
+	prepared := Prepare(record, 80) // 80 = longest advert
+
+	for name, tc := range map[string]struct {
+		advert *fingerprint.Fingerprint
+		want   int
+	}{
+		"advertA": {advertA, 100},
+		"advertB": {advertB, 400},
+	} {
+		got, err := prepared.Find(tc.advert, DefaultParams())
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if len(got) != 1 || got[0].FrameOffset != tc.want {
+			t.Fatalf("%s: expected 1 detection at %d, got %+v", name, tc.want, got)
+		}
+	}
+}
+
 func TestFindRejectsLongerAdvert(t *testing.T) {
 	record := &fingerprint.Fingerprint{Bits: make([][]int8, 12), SampleRate: 22050, HopSamples: 256}
 	advert := &fingerprint.Fingerprint{Bits: make([][]int8, 12), SampleRate: 22050, HopSamples: 256}

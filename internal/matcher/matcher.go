@@ -6,6 +6,10 @@
 // cross-correlation. A detection must clear three bars: it must stand out above
 // the noise floor, clear an absolute minimum score, and agree consistently
 // second-by-second.
+//
+// To match many adverts against one recording, Prepare the recording once (its
+// per-band FFTs are the expensive part) and reuse the PreparedRecord for every
+// advert.
 package matcher
 
 import (
@@ -47,19 +51,58 @@ type Detection struct {
 	Confidence  string  // high | medium | review | low
 }
 
-// Find returns every detected airing of advert inside record, sorted by time.
-func Find(record, advert *fingerprint.Fingerprint, p Params) ([]Detection, error) {
+// PreparedRecord is a recording fingerprint with its per-band FFTs precomputed,
+// ready to be matched against many adverts without recomputing the record.
+type PreparedRecord struct {
+	record          *fingerprint.Fingerprint
+	length          int            // FFT length (power of two)
+	maxAdvertFrames int            // longest advert this preparation supports
+	recFFT          [][]complex128 // FFT of each ±1 record band, padded to length
+}
+
+// Prepare precomputes the recording's transforms. maxAdvertFrames must be at
+// least as large as the longest advert that will be matched against it.
+func Prepare(record *fingerprint.Fingerprint, maxAdvertFrames int) *PreparedRecord {
+	n := record.NumFrames()
+	bands := record.NumBands()
+	length := dsp.NextPow2(n + maxAdvertFrames)
+
+	recFFT := make([][]complex128, bands)
+	for b := 0; b < bands; b++ {
+		buf := make([]complex128, length)
+		for i := 0; i < n; i++ {
+			buf[i] = complex(float64(2*record.Bits[b][i]-1), 0)
+		}
+		dsp.FFT(buf)
+		recFFT[b] = buf
+	}
+
+	return &PreparedRecord{
+		record:          record,
+		length:          length,
+		maxAdvertFrames: maxAdvertFrames,
+		recFFT:          recFFT,
+	}
+}
+
+// Find returns every detected airing of advert inside the prepared recording,
+// sorted by time.
+func (pr *PreparedRecord) Find(advert *fingerprint.Fingerprint, p Params) ([]Detection, error) {
+	record := pr.record
 	switch {
 	case advert.NumFrames() == 0:
 		return nil, errors.New("matcher: advert fingerprint is empty")
 	case advert.NumFrames() > record.NumFrames():
 		return nil, fmt.Errorf("matcher: advert (%.1fs) is longer than recording (%.1fs)",
 			advert.DurationSeconds(), record.DurationSeconds())
+	case advert.NumFrames() > pr.maxAdvertFrames:
+		return nil, fmt.Errorf("matcher: advert has %d frames but record was prepared for max %d",
+			advert.NumFrames(), pr.maxAdvertFrames)
 	case advert.NumBands() != record.NumBands():
 		return nil, errors.New("matcher: advert and recording have different band counts")
 	}
 
-	curve := scoreCurve(record, advert)
+	curve := pr.scoreCurve(advert)
 	mean, std := meanStd(curve)
 	height := math.Max(p.MinScore, mean+p.ThresholdStdDevs*std)
 
@@ -88,26 +131,26 @@ func Find(record, advert *fingerprint.Fingerprint, p Params) ([]Detection, error
 	return detections, nil
 }
 
+// Find matches a single advert against a single recording. It is a convenience
+// wrapper around Prepare + Find for the one-off case.
+func Find(record, advert *fingerprint.Fingerprint, p Params) ([]Detection, error) {
+	return Prepare(record, advert.NumFrames()).Find(advert, p)
+}
+
 // scoreCurve returns the agreement fraction at every start offset of the advert
-// inside the recording. Cells are mapped 0/1 → -1/+1 so a cross-correlation
-// sums to (#agree − #disagree); rescaling turns it into a fraction in [0, 1].
-func scoreCurve(record, advert *fingerprint.Fingerprint) []float64 {
-	n := record.NumFrames()
+// inside the recording, reusing the record's precomputed FFTs. Cells are mapped
+// 0/1 → -1/+1 so a cross-correlation sums to (#agree − #disagree); rescaling
+// turns it into a fraction in [0, 1].
+func (pr *PreparedRecord) scoreCurve(advert *fingerprint.Fingerprint) []float64 {
+	n := pr.record.NumFrames()
 	m := advert.NumFrames()
-	bands := record.NumBands()
-	length := dsp.NextPow2(n + m)
+	bands := pr.record.NumBands()
 	totalCells := float64(bands * m)
 
-	acc := make([]complex128, length)
-	advBuf := make([]complex128, length)
+	acc := make([]complex128, pr.length)
+	advBuf := make([]complex128, pr.length)
 
 	for b := 0; b < bands; b++ {
-		recBuf := make([]complex128, length)
-		for i := 0; i < n; i++ {
-			recBuf[i] = complex(float64(2*record.Bits[b][i]-1), 0)
-		}
-		dsp.FFT(recBuf)
-
 		for i := range advBuf {
 			advBuf[i] = 0
 		}
@@ -116,8 +159,9 @@ func scoreCurve(record, advert *fingerprint.Fingerprint) []float64 {
 		}
 		dsp.FFT(advBuf)
 
-		for k := 0; k < length; k++ {
-			acc[k] += recBuf[k] * advBuf[k]
+		recF := pr.recFFT[b]
+		for k := 0; k < pr.length; k++ {
+			acc[k] += recF[k] * advBuf[k]
 		}
 	}
 	dsp.IFFT(acc)
