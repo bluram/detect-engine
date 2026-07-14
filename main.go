@@ -1,6 +1,8 @@
-// Command advert-detect finds where a short advert airs inside a long recording.
+// Command detect-engine finds where a short query clip occurs inside a long
+// record (audio or video).
 //
-//	advert-detect -record recording.mp3 -advert advert.mp3
+//	detect-engine -record record.mp3 -query clip.mp3
+//	detect-engine -record record.mp3 -queries-dir ./clips
 //
 // See -help for all flags. Both inputs may be audio or video files.
 package main
@@ -8,7 +10,7 @@ package main
 import (
 	"os"
 
-	"github.com/bluram/advert-detect/internal/cli"
+	"github.com/bluram/detect-engine/internal/cli"
 )
 
 func main() {

@@ -3,7 +3,7 @@ package matcher
 import (
 	"testing"
 
-	"github.com/bluram/advert-detect/internal/fingerprint"
+	"github.com/bluram/detect-engine/internal/fingerprint"
 )
 
 // deterministic but well-mixed pattern (hash-based) so the baseline correlation
@@ -16,8 +16,8 @@ func bitAt(band, frame int) int8 {
 	return int8(h & 1)
 }
 
-func TestFindEmbeddedAdvert(t *testing.T) {
-	const bands, recFrames, advFrames, offset = 12, 500, 80, 150
+func TestFindEmbeddedQuery(t *testing.T) {
+	const bands, recFrames, queryFrames, offset = 12, 500, 80, 150
 
 	record := &fingerprint.Fingerprint{SampleRate: 22050, HopSamples: 256}
 	record.Bits = make([][]int8, bands)
@@ -28,14 +28,14 @@ func TestFindEmbeddedAdvert(t *testing.T) {
 		}
 	}
 
-	// advert is an exact slice of the record at a known offset.
-	advert := &fingerprint.Fingerprint{SampleRate: 22050, HopSamples: 256}
-	advert.Bits = make([][]int8, bands)
+	// query is an exact slice of the record at a known offset.
+	query := &fingerprint.Fingerprint{SampleRate: 22050, HopSamples: 256}
+	query.Bits = make([][]int8, bands)
 	for b := 0; b < bands; b++ {
-		advert.Bits[b] = append([]int8(nil), record.Bits[b][offset:offset+advFrames]...)
+		query.Bits[b] = append([]int8(nil), record.Bits[b][offset:offset+queryFrames]...)
 	}
 
-	detections, err := Find(record, advert, DefaultParams())
+	detections, err := Find(record, query, DefaultParams())
 	if err != nil {
 		t.Fatalf("Find returned error: %v", err)
 	}
@@ -50,7 +50,7 @@ func TestFindEmbeddedAdvert(t *testing.T) {
 	}
 }
 
-func TestPreparedRecordMatchesMultipleAdverts(t *testing.T) {
+func TestPreparedRecordMatchesMultipleQueries(t *testing.T) {
 	const bands, recFrames = 12, 600
 
 	record := &fingerprint.Fingerprint{SampleRate: 22050, HopSamples: 256}
@@ -62,7 +62,7 @@ func TestPreparedRecordMatchesMultipleAdverts(t *testing.T) {
 		}
 	}
 
-	// two adverts of different lengths, embedded at different offsets.
+	// two queries of different lengths, embedded at different offsets.
 	sliceAt := func(offset, length int) *fingerprint.Fingerprint {
 		fp := &fingerprint.Fingerprint{SampleRate: 22050, HopSamples: 256, Bits: make([][]int8, bands)}
 		for b := 0; b < bands; b++ {
@@ -70,19 +70,19 @@ func TestPreparedRecordMatchesMultipleAdverts(t *testing.T) {
 		}
 		return fp
 	}
-	advertA := sliceAt(100, 80)
-	advertB := sliceAt(400, 50)
+	queryA := sliceAt(100, 80)
+	queryB := sliceAt(400, 50)
 
-	prepared := Prepare(record, 80) // 80 = longest advert
+	prepared := Prepare(record, 80) // 80 = longest query
 
 	for name, tc := range map[string]struct {
-		advert *fingerprint.Fingerprint
-		want   int
+		query *fingerprint.Fingerprint
+		want  int
 	}{
-		"advertA": {advertA, 100},
-		"advertB": {advertB, 400},
+		"queryA": {queryA, 100},
+		"queryB": {queryB, 400},
 	} {
-		got, err := prepared.Find(tc.advert, DefaultParams())
+		got, err := prepared.Find(tc.query, DefaultParams())
 		if err != nil {
 			t.Fatalf("%s: %v", name, err)
 		}
@@ -92,14 +92,14 @@ func TestPreparedRecordMatchesMultipleAdverts(t *testing.T) {
 	}
 }
 
-func TestFindRejectsLongerAdvert(t *testing.T) {
+func TestFindRejectsLongerQuery(t *testing.T) {
 	record := &fingerprint.Fingerprint{Bits: make([][]int8, 12), SampleRate: 22050, HopSamples: 256}
-	advert := &fingerprint.Fingerprint{Bits: make([][]int8, 12), SampleRate: 22050, HopSamples: 256}
+	query := &fingerprint.Fingerprint{Bits: make([][]int8, 12), SampleRate: 22050, HopSamples: 256}
 	for b := 0; b < 12; b++ {
 		record.Bits[b] = make([]int8, 10)
-		advert.Bits[b] = make([]int8, 20)
+		query.Bits[b] = make([]int8, 20)
 	}
-	if _, err := Find(record, advert, DefaultParams()); err == nil {
-		t.Fatal("expected an error when advert is longer than recording")
+	if _, err := Find(record, query, DefaultParams()); err == nil {
+		t.Fatal("expected an error when query is longer than record")
 	}
 }

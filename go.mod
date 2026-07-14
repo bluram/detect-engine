@@ -1,3 +1,3 @@
-module github.com/bluram/advert-detect
+module github.com/bluram/detect-engine
 
 go 1.26.1

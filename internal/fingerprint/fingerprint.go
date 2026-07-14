@@ -10,8 +10,8 @@ package fingerprint
 import (
 	"math"
 
-	"github.com/bluram/advert-detect/internal/audio"
-	"github.com/bluram/advert-detect/internal/dsp"
+	"github.com/bluram/detect-engine/internal/audio"
+	"github.com/bluram/detect-engine/internal/dsp"
 )
 
 // epsilon guards the logarithm against log(0).
@@ -95,7 +95,7 @@ func (f *Fingerprint) DurationSeconds() float64 {
 }
 
 // FromFile decodes a media file and returns its fingerprint. When trim is true
-// (recommended for advert clips) leading/trailing silence is removed first.
+// (recommended for query clips) leading/trailing silence is removed first.
 func FromFile(path string, cfg Config, trim bool) (*Fingerprint, error) {
 	cfg = cfg.normalised()
 	samples, err := audio.Decode(path, cfg.SampleRate)
