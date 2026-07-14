@@ -100,7 +100,10 @@ The result is a single self-contained binary (no external Go libraries).
 | `-min-second-score` | `0.40` | every 1-second block must agree at least this much |
 | `-min-gap` | query×0.8 | minimum seconds between two matches |
 | `-json` | off | machine-readable output |
-| `-v` | off | verbose logging to stderr |
+| `-quiet` | off | suppress the live progress output |
+
+Progress (spinner + per-step timing) is shown on stderr while the record is
+being fingerprinted, and switches off automatically when output is piped.
 
 Provide `-query` or `-queries-dir` (at least one). **Exit codes:** `0` = found ·
 `1` = not found · `2` = usage/error.

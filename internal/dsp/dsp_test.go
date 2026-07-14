@@ -19,6 +19,17 @@ func TestFFTInverseRoundTrip(t *testing.T) {
 	}
 }
 
+// A radix-2 FFT would silently compute garbage on a non-power-of-two length,
+// so it must refuse loudly instead.
+func TestFFTRejectsNonPowerOfTwo(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Fatal("expected FFT to panic on non-power-of-two length")
+		}
+	}()
+	FFT(make([]complex128, 500))
+}
+
 func TestPowerSpectrumFindsTone(t *testing.T) {
 	const n, bin = 512, 20
 

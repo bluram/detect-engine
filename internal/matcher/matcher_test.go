@@ -103,3 +103,39 @@ func TestFindRejectsLongerQuery(t *testing.T) {
 		t.Fatal("expected an error when query is longer than record")
 	}
 }
+
+// Regression test: peaks at the very first and very last curve positions must
+// be detectable (a record can start or end exactly on a match).
+func TestFindQueryAtRecordBoundaries(t *testing.T) {
+	const bands, recFrames, queryFrames = 12, 500, 80
+
+	record := &fingerprint.Fingerprint{SampleRate: 22050, HopSamples: 256}
+	record.Bits = make([][]int8, bands)
+	for b := 0; b < bands; b++ {
+		record.Bits[b] = make([]int8, recFrames)
+		for f := 0; f < recFrames; f++ {
+			record.Bits[b][f] = bitAt(b, f)
+		}
+	}
+
+	sliceAt := func(offset int) *fingerprint.Fingerprint {
+		fp := &fingerprint.Fingerprint{SampleRate: 22050, HopSamples: 256, Bits: make([][]int8, bands)}
+		for b := 0; b < bands; b++ {
+			fp.Bits[b] = append([]int8(nil), record.Bits[b][offset:offset+queryFrames]...)
+		}
+		return fp
+	}
+
+	for name, offset := range map[string]int{
+		"at record start": 0,
+		"at record end":   recFrames - queryFrames,
+	} {
+		got, err := Find(record, sliceAt(offset), DefaultParams())
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if len(got) != 1 || got[0].FrameOffset != offset {
+			t.Fatalf("%s: expected 1 detection at frame %d, got %+v", name, offset, got)
+		}
+	}
+}

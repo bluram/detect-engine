@@ -31,6 +31,11 @@ func transform(x []complex128, inverse bool) {
 	if n <= 1 {
 		return
 	}
+	// A radix-2 FFT silently computes garbage on any other length, so refuse
+	// loudly instead — this is a programmer error, not a runtime condition.
+	if n&(n-1) != 0 {
+		panic("dsp: FFT length must be a power of two")
+	}
 
 	// Reorder the input by bit-reversed index.
 	for i, j := 1, 0; i < n; i++ {

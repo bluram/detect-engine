@@ -211,8 +211,16 @@ func worstSecondScore(record, query *fingerprint.Fingerprint, offset int) float6
 // are closer than minGap (higher score wins), then sorted by position.
 func findPeaks(curve []float64, height float64, minGap int) []int {
 	var candidates []int
-	for i := 1; i < len(curve)-1; i++ {
-		if curve[i] >= height && curve[i] >= curve[i-1] && curve[i] >= curve[i+1] {
+	for i := 0; i < len(curve); i++ {
+		if curve[i] < height {
+			continue
+		}
+		// Boundary positions have no neighbour on that side, so they only need
+		// to beat the neighbour they do have — a match at the very start or
+		// very end of the record must still be detectable.
+		leftOK := i == 0 || curve[i] >= curve[i-1]
+		rightOK := i == len(curve)-1 || curve[i] >= curve[i+1]
+		if leftOK && rightOK {
 			candidates = append(candidates, i)
 		}
 	}
