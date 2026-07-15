@@ -95,7 +95,7 @@ func (f *Fingerprint) DurationSeconds() float64 {
 }
 
 // FromFile decodes a media file and returns its fingerprint. When trim is true
-// (recommended for query clips) leading/trailing silence is removed first.
+// (recommended for reference clips) leading/trailing silence is removed first.
 func FromFile(path string, cfg Config, trim bool) (*Fingerprint, error) {
 	cfg = cfg.normalised()
 	samples, err := audio.Decode(path, cfg.SampleRate)

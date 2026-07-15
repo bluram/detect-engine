@@ -1,5 +1,5 @@
-// Package matcher slides a query fingerprint across a record fingerprint and
-// reports where the query occurs.
+// Package matcher slides a reference fingerprint across a record fingerprint and
+// reports where the reference occurs.
 //
 // The match score at each offset is the fraction of fingerprint cells that
 // agree (1.0 = identical, 0.5 = unrelated), computed efficiently with an FFT
@@ -7,11 +7,11 @@
 // noise floor, clear an absolute minimum score, and agree consistently
 // second-by-second.
 //
-// To match many queries against one record, Prepare the record once (its
+// To match many references against one record, Prepare the record once (its
 // per-band FFTs are the expensive part) and reuse the PreparedRecord for every
-// query.
+// reference.
 //
-// The package is domain-neutral: it knows nothing about what a query or record
+// The package is domain-neutral: it knows nothing about what a reference or record
 // contains (a jingle, a movie, a spoken phrase, …) — only that it looks for one
 // fingerprint inside another.
 package matcher
@@ -31,7 +31,7 @@ type Params struct {
 	MinScore         float64 // absolute floor on overall agreement (0..1)
 	ThresholdStdDevs float64 // a peak must exceed mean + this many std devs
 	MinSecondScore   float64 // every 1-second block must agree at least this much
-	MinGapSeconds    float64 // minimum spacing between matches; 0 → 80% of query length
+	MinGapSeconds    float64 // minimum spacing between matches; 0 → 80% of reference length
 }
 
 // DefaultParams returns conservative thresholds tuned to catch real matches
@@ -45,31 +45,31 @@ func DefaultParams() Params {
 	}
 }
 
-// Detection is one detected occurrence of the query inside the record.
+// Detection is one detected occurrence of the reference inside the record.
 type Detection struct {
 	FrameOffset int
 	TimeSeconds float64 // start of the match, seconds from the record start
-	EndSeconds  float64 // end of the match (start + query length)
+	EndSeconds  float64 // end of the match (start + reference length)
 	Score       float64 // overall agreement at the peak (0..1)
 	WorstSecond float64 // weakest 1-second agreement within the match (0..1)
 	Confidence  string  // high | medium | review | low
 }
 
 // PreparedRecord is a record fingerprint with its per-band FFTs precomputed,
-// ready to be matched against many queries without recomputing the record.
+// ready to be matched against many references without recomputing the record.
 type PreparedRecord struct {
-	record         *fingerprint.Fingerprint
-	length         int            // FFT length (power of two)
-	maxQueryFrames int            // longest query this preparation supports
-	recFFT         [][]complex128 // FFT of each ±1 record band, padded to length
+	record             *fingerprint.Fingerprint
+	length             int            // FFT length (power of two)
+	maxReferenceFrames int            // longest reference this preparation supports
+	recFFT             [][]complex128 // FFT of each ±1 record band, padded to length
 }
 
-// Prepare precomputes the record's transforms. maxQueryFrames must be at least
-// as large as the longest query that will be matched against it.
-func Prepare(record *fingerprint.Fingerprint, maxQueryFrames int) *PreparedRecord {
+// Prepare precomputes the record's transforms. maxReferenceFrames must be at least
+// as large as the longest reference that will be matched against it.
+func Prepare(record *fingerprint.Fingerprint, maxReferenceFrames int) *PreparedRecord {
 	n := record.NumFrames()
 	bands := record.NumBands()
-	length := dsp.NextPow2(n + maxQueryFrames)
+	length := dsp.NextPow2(n + maxReferenceFrames)
 
 	recFFT := make([][]complex128, bands)
 	for b := 0; b < bands; b++ {
@@ -82,43 +82,43 @@ func Prepare(record *fingerprint.Fingerprint, maxQueryFrames int) *PreparedRecor
 	}
 
 	return &PreparedRecord{
-		record:         record,
-		length:         length,
-		maxQueryFrames: maxQueryFrames,
-		recFFT:         recFFT,
+		record:             record,
+		length:             length,
+		maxReferenceFrames: maxReferenceFrames,
+		recFFT:             recFFT,
 	}
 }
 
-// Find returns every detected occurrence of query inside the prepared record,
+// Find returns every detected occurrence of reference inside the prepared record,
 // sorted by time.
-func (pr *PreparedRecord) Find(query *fingerprint.Fingerprint, p Params) ([]Detection, error) {
+func (pr *PreparedRecord) Find(reference *fingerprint.Fingerprint, p Params) ([]Detection, error) {
 	record := pr.record
 	switch {
-	case query.NumFrames() == 0:
-		return nil, errors.New("matcher: query fingerprint is empty")
-	case query.NumFrames() > record.NumFrames():
-		return nil, fmt.Errorf("matcher: query (%.1fs) is longer than record (%.1fs)",
-			query.DurationSeconds(), record.DurationSeconds())
-	case query.NumFrames() > pr.maxQueryFrames:
-		return nil, fmt.Errorf("matcher: query has %d frames but record was prepared for max %d",
-			query.NumFrames(), pr.maxQueryFrames)
-	case query.NumBands() != record.NumBands():
-		return nil, errors.New("matcher: query and record have different band counts")
+	case reference.NumFrames() == 0:
+		return nil, errors.New("matcher: reference fingerprint is empty")
+	case reference.NumFrames() > record.NumFrames():
+		return nil, fmt.Errorf("matcher: reference (%.1fs) is longer than record (%.1fs)",
+			reference.DurationSeconds(), record.DurationSeconds())
+	case reference.NumFrames() > pr.maxReferenceFrames:
+		return nil, fmt.Errorf("matcher: reference has %d frames but record was prepared for max %d",
+			reference.NumFrames(), pr.maxReferenceFrames)
+	case reference.NumBands() != record.NumBands():
+		return nil, errors.New("matcher: reference and record have different band counts")
 	}
 
-	curve := pr.scoreCurve(query)
+	curve := pr.scoreCurve(reference)
 	mean, std := meanStd(curve)
 	height := math.Max(p.MinScore, mean+p.ThresholdStdDevs*std)
 
 	gapSeconds := p.MinGapSeconds
 	if gapSeconds <= 0 {
-		gapSeconds = math.Max(0.5, query.DurationSeconds()*0.8)
+		gapSeconds = math.Max(0.5, reference.DurationSeconds()*0.8)
 	}
 	minGap := max(1, int(gapSeconds*float64(record.SampleRate)/float64(record.HopSamples)))
 
 	var detections []Detection
 	for _, peak := range findPeaks(curve, height, minGap) {
-		worst := worstSecondScore(record, query, peak)
+		worst := worstSecondScore(record, reference, peak)
 		if worst < p.MinSecondScore {
 			continue
 		}
@@ -126,7 +126,7 @@ func (pr *PreparedRecord) Find(query *fingerprint.Fingerprint, p Params) ([]Dete
 		detections = append(detections, Detection{
 			FrameOffset: peak,
 			TimeSeconds: start,
-			EndSeconds:  start + query.DurationSeconds(),
+			EndSeconds:  start + reference.DurationSeconds(),
 			Score:       curve[peak],
 			WorstSecond: worst,
 			Confidence:  confidence(curve[peak], worst),
@@ -135,37 +135,37 @@ func (pr *PreparedRecord) Find(query *fingerprint.Fingerprint, p Params) ([]Dete
 	return detections, nil
 }
 
-// Find matches a single query against a single record. It is a convenience
+// Find matches a single reference against a single record. It is a convenience
 // wrapper around Prepare + Find for the one-off case.
-func Find(record, query *fingerprint.Fingerprint, p Params) ([]Detection, error) {
-	return Prepare(record, query.NumFrames()).Find(query, p)
+func Find(record, reference *fingerprint.Fingerprint, p Params) ([]Detection, error) {
+	return Prepare(record, reference.NumFrames()).Find(reference, p)
 }
 
-// scoreCurve returns the agreement fraction at every start offset of the query
+// scoreCurve returns the agreement fraction at every start offset of the reference
 // inside the record, reusing the record's precomputed FFTs. Cells are mapped
 // 0/1 → -1/+1 so a cross-correlation sums to (#agree − #disagree); rescaling
 // turns it into a fraction in [0, 1].
-func (pr *PreparedRecord) scoreCurve(query *fingerprint.Fingerprint) []float64 {
+func (pr *PreparedRecord) scoreCurve(reference *fingerprint.Fingerprint) []float64 {
 	n := pr.record.NumFrames()
-	m := query.NumFrames()
+	m := reference.NumFrames()
 	bands := pr.record.NumBands()
 	totalCells := float64(bands * m)
 
 	acc := make([]complex128, pr.length)
-	queryBuf := make([]complex128, pr.length)
+	referenceBuf := make([]complex128, pr.length)
 
 	for b := 0; b < bands; b++ {
-		for i := range queryBuf {
-			queryBuf[i] = 0
+		for i := range referenceBuf {
+			referenceBuf[i] = 0
 		}
 		for j := 0; j < m; j++ { // reversed → correlation via convolution
-			queryBuf[j] = complex(float64(2*query.Bits[b][m-1-j]-1), 0)
+			referenceBuf[j] = complex(float64(2*reference.Bits[b][m-1-j]-1), 0)
 		}
-		dsp.FFT(queryBuf)
+		dsp.FFT(referenceBuf)
 
 		recF := pr.recFFT[b]
 		for k := 0; k < pr.length; k++ {
-			acc[k] += recF[k] * queryBuf[k]
+			acc[k] += recF[k] * referenceBuf[k]
 		}
 	}
 	dsp.IFFT(acc)
@@ -180,10 +180,10 @@ func (pr *PreparedRecord) scoreCurve(query *fingerprint.Fingerprint) []float64 {
 
 // worstSecondScore returns the weakest one-second block agreement at an offset,
 // rejecting matches that line up on average but drift somewhere inside.
-func worstSecondScore(record, query *fingerprint.Fingerprint, offset int) float64 {
+func worstSecondScore(record, reference *fingerprint.Fingerprint, offset int) float64 {
 	framesPerSecond := max(1, int(math.Round(float64(record.SampleRate)/float64(record.HopSamples))))
-	m := query.NumFrames()
-	bands := query.NumBands()
+	m := reference.NumFrames()
+	bands := reference.NumBands()
 
 	worst := 1.0
 	for start := 0; start < m; start += framesPerSecond {
@@ -191,7 +191,7 @@ func worstSecondScore(record, query *fingerprint.Fingerprint, offset int) float6
 		var same, count int
 		for b := 0; b < bands; b++ {
 			for j := start; j < end; j++ {
-				if record.Bits[b][offset+j] == query.Bits[b][j] {
+				if record.Bits[b][offset+j] == reference.Bits[b][j] {
 					same++
 				}
 				count++

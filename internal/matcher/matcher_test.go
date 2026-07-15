@@ -16,8 +16,8 @@ func bitAt(band, frame int) int8 {
 	return int8(h & 1)
 }
 
-func TestFindEmbeddedQuery(t *testing.T) {
-	const bands, recFrames, queryFrames, offset = 12, 500, 80, 150
+func TestFindEmbeddedReference(t *testing.T) {
+	const bands, recFrames, referenceFrames, offset = 12, 500, 80, 150
 
 	record := &fingerprint.Fingerprint{SampleRate: 22050, HopSamples: 256}
 	record.Bits = make([][]int8, bands)
@@ -28,14 +28,14 @@ func TestFindEmbeddedQuery(t *testing.T) {
 		}
 	}
 
-	// query is an exact slice of the record at a known offset.
-	query := &fingerprint.Fingerprint{SampleRate: 22050, HopSamples: 256}
-	query.Bits = make([][]int8, bands)
+	// reference is an exact slice of the record at a known offset.
+	reference := &fingerprint.Fingerprint{SampleRate: 22050, HopSamples: 256}
+	reference.Bits = make([][]int8, bands)
 	for b := 0; b < bands; b++ {
-		query.Bits[b] = append([]int8(nil), record.Bits[b][offset:offset+queryFrames]...)
+		reference.Bits[b] = append([]int8(nil), record.Bits[b][offset:offset+referenceFrames]...)
 	}
 
-	detections, err := Find(record, query, DefaultParams())
+	detections, err := Find(record, reference, DefaultParams())
 	if err != nil {
 		t.Fatalf("Find returned error: %v", err)
 	}
@@ -50,7 +50,7 @@ func TestFindEmbeddedQuery(t *testing.T) {
 	}
 }
 
-func TestPreparedRecordMatchesMultipleQueries(t *testing.T) {
+func TestPreparedRecordMatchesMultipleReferences(t *testing.T) {
 	const bands, recFrames = 12, 600
 
 	record := &fingerprint.Fingerprint{SampleRate: 22050, HopSamples: 256}
@@ -62,7 +62,7 @@ func TestPreparedRecordMatchesMultipleQueries(t *testing.T) {
 		}
 	}
 
-	// two queries of different lengths, embedded at different offsets.
+	// two references of different lengths, embedded at different offsets.
 	sliceAt := func(offset, length int) *fingerprint.Fingerprint {
 		fp := &fingerprint.Fingerprint{SampleRate: 22050, HopSamples: 256, Bits: make([][]int8, bands)}
 		for b := 0; b < bands; b++ {
@@ -70,19 +70,19 @@ func TestPreparedRecordMatchesMultipleQueries(t *testing.T) {
 		}
 		return fp
 	}
-	queryA := sliceAt(100, 80)
-	queryB := sliceAt(400, 50)
+	referenceA := sliceAt(100, 80)
+	referenceB := sliceAt(400, 50)
 
-	prepared := Prepare(record, 80) // 80 = longest query
+	prepared := Prepare(record, 80) // 80 = longest reference
 
 	for name, tc := range map[string]struct {
-		query *fingerprint.Fingerprint
-		want  int
+		reference *fingerprint.Fingerprint
+		want      int
 	}{
-		"queryA": {queryA, 100},
-		"queryB": {queryB, 400},
+		"referenceA": {referenceA, 100},
+		"referenceB": {referenceB, 400},
 	} {
-		got, err := prepared.Find(tc.query, DefaultParams())
+		got, err := prepared.Find(tc.reference, DefaultParams())
 		if err != nil {
 			t.Fatalf("%s: %v", name, err)
 		}
@@ -92,22 +92,22 @@ func TestPreparedRecordMatchesMultipleQueries(t *testing.T) {
 	}
 }
 
-func TestFindRejectsLongerQuery(t *testing.T) {
+func TestFindRejectsLongerReference(t *testing.T) {
 	record := &fingerprint.Fingerprint{Bits: make([][]int8, 12), SampleRate: 22050, HopSamples: 256}
-	query := &fingerprint.Fingerprint{Bits: make([][]int8, 12), SampleRate: 22050, HopSamples: 256}
+	reference := &fingerprint.Fingerprint{Bits: make([][]int8, 12), SampleRate: 22050, HopSamples: 256}
 	for b := 0; b < 12; b++ {
 		record.Bits[b] = make([]int8, 10)
-		query.Bits[b] = make([]int8, 20)
+		reference.Bits[b] = make([]int8, 20)
 	}
-	if _, err := Find(record, query, DefaultParams()); err == nil {
-		t.Fatal("expected an error when query is longer than record")
+	if _, err := Find(record, reference, DefaultParams()); err == nil {
+		t.Fatal("expected an error when reference is longer than record")
 	}
 }
 
 // Regression test: peaks at the very first and very last curve positions must
 // be detectable (a record can start or end exactly on a match).
-func TestFindQueryAtRecordBoundaries(t *testing.T) {
-	const bands, recFrames, queryFrames = 12, 500, 80
+func TestFindReferenceAtRecordBoundaries(t *testing.T) {
+	const bands, recFrames, referenceFrames = 12, 500, 80
 
 	record := &fingerprint.Fingerprint{SampleRate: 22050, HopSamples: 256}
 	record.Bits = make([][]int8, bands)
@@ -121,14 +121,14 @@ func TestFindQueryAtRecordBoundaries(t *testing.T) {
 	sliceAt := func(offset int) *fingerprint.Fingerprint {
 		fp := &fingerprint.Fingerprint{SampleRate: 22050, HopSamples: 256, Bits: make([][]int8, bands)}
 		for b := 0; b < bands; b++ {
-			fp.Bits[b] = append([]int8(nil), record.Bits[b][offset:offset+queryFrames]...)
+			fp.Bits[b] = append([]int8(nil), record.Bits[b][offset:offset+referenceFrames]...)
 		}
 		return fp
 	}
 
 	for name, offset := range map[string]int{
 		"at record start": 0,
-		"at record end":   recFrames - queryFrames,
+		"at record end":   recFrames - referenceFrames,
 	} {
 		got, err := Find(record, sliceAt(offset), DefaultParams())
 		if err != nil {

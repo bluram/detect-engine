@@ -1,20 +1,20 @@
 # detect-engine
 
-Find where a short **query** clip occurs inside a long **record** — a
+Find where a short **reference** clip occurs inside a long **record** — a
 Shazam-style media matcher, written from scratch in Go.
 
 The engine is **domain-neutral**: it doesn't know or care what the audio *is*
 (a song, a movie, a jingle, a spoken phrase …). You give it two files; it
-reports the timestamps where the query occurs in the record, each with a
+reports the timestamps where the reference occurs in the record, each with a
 confidence score.
 
 ```
-detect-engine -record record.mp3 -query clip.mp3
+detect-engine -record record.mp3 -reference clip.mp3
 ```
 
 ```
-  Record  : record.mp3
-  Queries : 1 searched
+  Record     : record.mp3
+  References : 1 searched
 
   ── clip.mp3                  ✓ 3 match(es)
          1  17:55.0 → 18:22.0  (27.0s)   score 0.855   worst/sec 0.834   high
@@ -31,7 +31,7 @@ video automatically.
 
 Both files are turned into a **fingerprint**: a grid of 1s and 0s (MFCC) that
 captures the *shape* of the sound over time while ignoring loudness and noise.
-The query's fingerprint is slid across the record's; wherever they line up
+The reference's fingerprint is slid across the record's; wherever they line up
 strongly enough, that's a match.
 
 ```
@@ -62,18 +62,18 @@ detect-engine/                  (module: github.com/bluram/detect-engine)
     ├── audio/                  decode media → float samples (via ffmpeg) + silence trim
     ├── dsp/                    generic signal tools: FFT, Frames, Hamming window, PowerSpectrum
     ├── fingerprint/            the MFCC recipe → Fingerprint (mel filterbank, DCT, binarize)
-    ├── matcher/                slide fingerprints, detect matches (query in record)
+    ├── matcher/                slide fingerprints, detect matches (reference in record)
     └── cli/                    flag parsing, wiring, human/JSON output
 ```
 
 - **`dsp`** knows nothing about fingerprints — it's reusable signal math.
 - **`fingerprint`** builds on `dsp` and produces the fingerprint.
-- **`matcher`** compares two fingerprints; it speaks only *query* and *record*,
+- **`matcher`** compares two fingerprints; it speaks only *reference* and *record*,
   never the domain (song, movie, …).
 - **`cli`** is the composition root that wires everything together.
 
-To match **many queries against one record**, `matcher.Prepare` transforms the
-record once and reuses it for every query.
+To match **many references against one record**, `matcher.Prepare` transforms the
+record once and reuses it for every reference.
 
 ---
 
@@ -83,8 +83,8 @@ Requires **Go 1.21+** and **ffmpeg** on PATH.
 
 ```bash
 go build -o detect-engine .
-./detect-engine -record record.mp3 -query clip.mp3          # one query
-./detect-engine -record record.mp3 -queries-dir ./clips     # many queries, one record
+./detect-engine -record record.mp3 -reference clip.mp3          # one reference
+./detect-engine -record record.mp3 -references-dir ./clips     # many references, one record
 ```
 
 The result is a single self-contained binary (no external Go libraries).
@@ -94,18 +94,18 @@ The result is a single self-contained binary (no external Go libraries).
 | Flag | Default | Meaning |
 |------|---------|---------|
 | `-record` | — | the record to search in (audio or video). **Required.** |
-| `-query` | — | a single query to find (audio or video) |
-| `-queries-dir` | — | a directory of queries to search against the record |
+| `-reference` | — | a single reference to find (audio or video) |
+| `-references-dir` | — | a directory of references to search against the record |
 | `-min-score` | `0.62` | absolute floor on overall agreement (0–1) |
 | `-min-second-score` | `0.40` | every 1-second block must agree at least this much |
-| `-min-gap` | query×0.8 | minimum seconds between two matches |
+| `-min-gap` | reference×0.8 | minimum seconds between two matches |
 | `-json` | off | machine-readable output |
 | `-quiet` | off | suppress the live progress output |
 
 Progress (spinner + per-step timing) is shown on stderr while the record is
 being fingerprinted, and switches off automatically when output is piped.
 
-Provide `-query` or `-queries-dir` (at least one). **Exit codes:** `0` = found ·
+Provide `-reference` or `-references-dir` (at least one). **Exit codes:** `0` = found ·
 `1` = not found · `2` = usage/error.
 
 ### Reading the numbers
@@ -126,5 +126,5 @@ go test ./...
 ```
 
 Covers the FFT round-trip, spectrum peak detection, fingerprint determinism, and
-an end-to-end matcher check (a query embedded in a record is found at the right
-offset, including many queries against one prepared record).
+an end-to-end matcher check (a reference embedded in a record is found at the right
+offset, including many references against one prepared record).

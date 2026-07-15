@@ -22,7 +22,7 @@ import (
 // record filenames often begin with a timestamp like 2026-07-13-14-00-05_...
 var timestampRE = regexp.MustCompile(`(\d{4}-\d{2}-\d{2}-\d{2}-\d{2}-\d{2})`)
 
-// mediaExtensions are the file types accepted from -queries-dir.
+// mediaExtensions are the file types accepted from -references-dir.
 var mediaExtensions = map[string]bool{
 	".mp3": true, ".wav": true, ".m4a": true, ".aac": true, ".flac": true,
 	".ogg": true, ".mp4": true, ".mkv": true, ".mov": true, ".avi": true,
@@ -30,8 +30,8 @@ var mediaExtensions = map[string]bool{
 
 type options struct {
 	record         string
-	query          string
-	queriesDir     string
+	reference      string
+	referencesDir  string
 	minScore       float64
 	minSecondScore float64
 	minGap         float64
@@ -39,21 +39,21 @@ type options struct {
 	quiet          bool
 }
 
-// queryFP is a fingerprinted query with its display label.
-type queryFP struct {
+// referenceFP is a fingerprinted reference with its display label.
+type referenceFP struct {
 	label string
 	fp    *fingerprint.Fingerprint
 }
 
-// queryResult holds the outcome of searching one query.
-type queryResult struct {
+// referenceResult holds the outcome of searching one reference.
+type referenceResult struct {
 	label      string
 	detections []matcher.Detection
 	err        error
 }
 
 // Run parses args, executes the search, and returns a process exit code:
-// 0 = at least one query found, 1 = none found, 2 = usage or runtime error.
+// 0 = at least one reference found, 1 = none found, 2 = usage or runtime error.
 func Run(args []string) int {
 	opts, err := parseArgs(args)
 	if err != nil {
@@ -67,7 +67,7 @@ func Run(args []string) int {
 
 	prog := newProgress(opts.quiet)
 
-	queryPaths, err := collectQueries(opts)
+	referencePaths, err := collectReferences(opts)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "error:", err)
 		return 2
@@ -75,12 +75,12 @@ func Run(args []string) int {
 
 	cfg := fingerprint.DefaultConfig()
 
-	// Fingerprint every query first (also gives the longest, to size the record).
-	var queries []queryFP
+	// Fingerprint every reference first (also gives the longest, to size the record).
+	var references []referenceFP
 	var warnings []string
 	maxFrames := 0
-	_ = prog.step(fmt.Sprintf("fingerprinting %d query(ies)", len(queryPaths)), func() error {
-		for _, path := range queryPaths {
+	_ = prog.step(fmt.Sprintf("fingerprinting %d reference(s)", len(referencePaths)), func() error {
+		for _, path := range referencePaths {
 			fp, err := fingerprint.FromFile(path, cfg, true)
 			if err != nil {
 				warnings = append(warnings, fmt.Sprintf("skipping %s: %v", path, err))
@@ -89,15 +89,15 @@ func Run(args []string) int {
 			if fp.NumFrames() > maxFrames {
 				maxFrames = fp.NumFrames()
 			}
-			queries = append(queries, queryFP{label: filepath.Base(path), fp: fp})
+			references = append(references, referenceFP{label: filepath.Base(path), fp: fp})
 		}
 		return nil
 	})
 	for _, w := range warnings {
 		fmt.Fprintln(os.Stderr, "warning:", w)
 	}
-	if len(queries) == 0 {
-		fmt.Fprintln(os.Stderr, "error: no queries could be fingerprinted")
+	if len(references) == 0 {
+		fmt.Fprintln(os.Stderr, "error: no references could be fingerprinted")
 		return 2
 	}
 
@@ -113,7 +113,7 @@ func Run(args []string) int {
 		return 2
 	}
 
-	// Prepare the record once, then match every query against it.
+	// Prepare the record once, then match every reference against it.
 	prepared := matcher.Prepare(recordFP, maxFrames)
 	params := matcher.DefaultParams()
 	params.MinScore = opts.minScore
@@ -123,30 +123,30 @@ func Run(args []string) int {
 
 	// JSON mode: collect everything, then emit one object.
 	if opts.asJSON {
-		results := make([]queryResult, 0, len(queries))
-		for _, q := range queries {
+		results := make([]referenceResult, 0, len(references))
+		for _, q := range references {
 			detections, err := prepared.Find(q.fp, params)
-			results = append(results, queryResult{label: q.label, detections: detections, err: err})
+			results = append(results, referenceResult{label: q.label, detections: detections, err: err})
 		}
 		printJSON(os.Stdout, opts, results, recordStart)
 		return exitCode(results)
 	}
 
-	// Human mode: stream each query's result as it finishes.
-	prog.note("matching %d query(ies)...", len(queries))
-	printHeader(os.Stdout, opts.record, len(queries))
-	results := make([]queryResult, 0, len(queries))
-	for _, q := range queries {
+	// Human mode: stream each reference's result as it finishes.
+	prog.note("matching %d reference(s)...", len(references))
+	printHeader(os.Stdout, opts.record, len(references))
+	results := make([]referenceResult, 0, len(references))
+	for _, q := range references {
 		detections, err := prepared.Find(q.fp, params)
-		r := queryResult{label: q.label, detections: detections, err: err}
+		r := referenceResult{label: q.label, detections: detections, err: err}
 		results = append(results, r)
-		printQueryBlock(os.Stdout, r, recordStart)
+		printReferenceBlock(os.Stdout, r, recordStart)
 	}
 	fmt.Fprintln(os.Stdout)
 	return exitCode(results)
 }
 
-func exitCode(results []queryResult) int {
+func exitCode(results []referenceResult) int {
 	for _, r := range results {
 		if len(r.detections) > 0 {
 			return 0
@@ -159,11 +159,11 @@ func parseArgs(args []string) (options, error) {
 	fs := flag.NewFlagSet("detect-engine", flag.ContinueOnError)
 	var opts options
 	fs.StringVar(&opts.record, "record", "", "path to the record to search in (audio or video)")
-	fs.StringVar(&opts.query, "query", "", "path to a single query to find")
-	fs.StringVar(&opts.queriesDir, "queries-dir", "", "directory of queries to search against the record")
+	fs.StringVar(&opts.reference, "reference", "", "path to a single reference to find")
+	fs.StringVar(&opts.referencesDir, "references-dir", "", "directory of references to search against the record")
 	fs.Float64Var(&opts.minScore, "min-score", 0.62, "absolute floor on overall agreement (0..1)")
 	fs.Float64Var(&opts.minSecondScore, "min-second-score", 0.40, "every 1-second block must agree at least this much")
-	fs.Float64Var(&opts.minGap, "min-gap", 0, "minimum seconds between matches (0 = 80% of query length)")
+	fs.Float64Var(&opts.minGap, "min-gap", 0, "minimum seconds between matches (0 = 80% of reference length)")
 	fs.BoolVar(&opts.asJSON, "json", false, "emit results as JSON")
 	fs.BoolVar(&opts.quiet, "quiet", false, "suppress progress output")
 
@@ -173,35 +173,35 @@ func parseArgs(args []string) (options, error) {
 	if opts.record == "" {
 		return options{}, fmt.Errorf("-record is required")
 	}
-	if opts.query == "" && opts.queriesDir == "" {
-		return options{}, fmt.Errorf("provide -query or -queries-dir")
+	if opts.reference == "" && opts.referencesDir == "" {
+		return options{}, fmt.Errorf("provide -reference or -references-dir")
 	}
 	return opts, nil
 }
 
-// collectQueries gathers query file paths from -query and/or -queries-dir.
-func collectQueries(opts options) ([]string, error) {
+// collectReferences gathers reference file paths from -reference and/or -references-dir.
+func collectReferences(opts options) ([]string, error) {
 	var paths []string
-	if opts.query != "" {
-		paths = append(paths, opts.query)
+	if opts.reference != "" {
+		paths = append(paths, opts.reference)
 	}
-	if opts.queriesDir != "" {
-		entries, err := os.ReadDir(opts.queriesDir)
+	if opts.referencesDir != "" {
+		entries, err := os.ReadDir(opts.referencesDir)
 		if err != nil {
-			return nil, fmt.Errorf("reading queries dir: %w", err)
+			return nil, fmt.Errorf("reading references dir: %w", err)
 		}
 		for _, e := range entries {
 			if e.IsDir() {
 				continue
 			}
 			if mediaExtensions[strings.ToLower(filepath.Ext(e.Name()))] {
-				paths = append(paths, filepath.Join(opts.queriesDir, e.Name()))
+				paths = append(paths, filepath.Join(opts.referencesDir, e.Name()))
 			}
 		}
 	}
 	sort.Strings(paths)
 	if len(paths) == 0 {
-		return nil, fmt.Errorf("no query files found")
+		return nil, fmt.Errorf("no reference files found")
 	}
 	return paths, nil
 }
@@ -218,12 +218,12 @@ func parseRecordStart(recordPath string) *time.Time {
 	return &t
 }
 
-func printHeader(w io.Writer, record string, nQueries int) {
-	fmt.Fprintf(w, "\n  Record  : %s\n", record)
-	fmt.Fprintf(w, "  Queries : %d searched\n\n", nQueries)
+func printHeader(w io.Writer, record string, nReferences int) {
+	fmt.Fprintf(w, "\n  %-10s : %s\n", "Record", record)
+	fmt.Fprintf(w, "  %-10s : %d searched\n\n", "References", nReferences)
 }
 
-func printQueryBlock(w io.Writer, r queryResult, start *time.Time) {
+func printReferenceBlock(w io.Writer, r referenceResult, start *time.Time) {
 	switch {
 	case r.err != nil:
 		fmt.Fprintf(w, "  ── %-28s  error: %v\n", r.label, r.err)
@@ -245,7 +245,7 @@ func printQueryBlock(w io.Writer, r queryResult, start *time.Time) {
 	}
 }
 
-func printJSON(w io.Writer, opts options, results []queryResult, start *time.Time) {
+func printJSON(w io.Writer, opts options, results []referenceResult, start *time.Time) {
 	type jsonDetection struct {
 		StartSeconds float64 `json:"start_seconds"`
 		EndSeconds   float64 `json:"end_seconds"`
@@ -258,20 +258,20 @@ func printJSON(w io.Writer, opts options, results []queryResult, start *time.Tim
 		ClockEnd     string  `json:"clock_end,omitempty"`
 	}
 	type jsonResult struct {
-		Query      string          `json:"query"`
+		Reference  string          `json:"reference"`
 		Found      int             `json:"found"`
 		Error      string          `json:"error,omitempty"`
 		Detections []jsonDetection `json:"detections"`
 	}
 
 	out := struct {
-		Record          string       `json:"record"`
-		QueriesSearched int          `json:"queries_searched"`
-		Results         []jsonResult `json:"results"`
-	}{Record: opts.record, QueriesSearched: len(results)}
+		Record             string       `json:"record"`
+		ReferencesSearched int          `json:"references_searched"`
+		Results            []jsonResult `json:"results"`
+	}{Record: opts.record, ReferencesSearched: len(results)}
 
 	for _, r := range results {
-		jr := jsonResult{Query: r.label, Found: len(r.detections)}
+		jr := jsonResult{Reference: r.label, Found: len(r.detections)}
 		if r.err != nil {
 			jr.Error = r.err.Error()
 		}
