@@ -56,21 +56,24 @@ Each package has one job, and dependencies flow one way
 
 ```
 detect-engine/                  (module: github.com/bluram/detect-engine)
-├── main.go                     thin entry point → cli.Run
-└── internal/
+├── cmd/                        the programs (one folder = one binary)
+│   ├── detect-engine/          SEARCH app: find references in a record
+│   └── fingerprinter/          FINGERPRINT app: media file → .bin fingerprint
+└── internal/                   the shared engine (both apps reuse it)
     ├── deps/                   checks external tools (ffmpeg) are installed
     ├── audio/                  decode media → float samples (via ffmpeg) + silence trim
     ├── dsp/                    generic signal tools: FFT, Frames, Hamming window, PowerSpectrum
-    ├── fingerprint/            the MFCC recipe → Fingerprint (mel filterbank, DCT, binarize)
+    ├── fingerprint/            the MFCC recipe → Fingerprint (+ .bin Save/Load)
     ├── matcher/                slide fingerprints, detect matches (reference in record)
     └── cli/                    flag parsing, wiring, human/JSON output
 ```
 
+- **`cmd/`** holds the programs; **`internal/`** holds the engine they share.
 - **`dsp`** knows nothing about fingerprints — it's reusable signal math.
-- **`fingerprint`** builds on `dsp` and produces the fingerprint.
+- **`fingerprint`** builds on `dsp`, produces the fingerprint, and saves/loads `.bin`.
 - **`matcher`** compares two fingerprints; it speaks only *reference* and *record*,
   never the domain (song, movie, …).
-- **`cli`** is the composition root that wires everything together.
+- **`cli`** is the composition root that wires the search app together.
 
 To match **many references against one record**, `matcher.Prepare` transforms the
 record once and reuses it for every reference.
@@ -82,12 +85,22 @@ record once and reuses it for every reference.
 Requires **Go 1.21+** and **ffmpeg** on PATH.
 
 ```bash
-go build -o detect-engine .
-./detect-engine -record record.mp3 -reference clip.mp3          # one reference
-./detect-engine -record record.mp3 -references-dir ./clips     # many references, one record
+# build both programs
+go build -o bin/detect-engine  ./cmd/detect-engine
+go build -o bin/fingerprinter  ./cmd/fingerprinter
+
+# 1. fingerprint the record(s) AND the reference(s) into .bin files
+./bin/fingerprinter -in-dir ./records      # → records/*.bin   (skips up-to-date ones)
+./bin/fingerprinter -in-dir ./clips        # → clips/*.bin
+
+# 2. search — loads .bin only (no decoding, no ffmpeg)
+./bin/detect-engine -record records/rec.mp3.bin -reference clips/clip.mp3.bin
+./bin/detect-engine -record records/rec.mp3.bin -references-dir ./clips   # folder of .bin references
 ```
 
-The result is a single self-contained binary (no external Go libraries).
+Only the **fingerprinter** touches ffmpeg. The **search** consumes `.bin` files, so
+records and references are fingerprinted once and matched many times.
+Each program is a single self-contained binary (no external Go libraries).
 
 ### Flags
 

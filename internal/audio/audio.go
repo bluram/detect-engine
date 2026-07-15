@@ -11,7 +11,20 @@ import (
 	"math"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"strings"
 )
+
+// mediaExtensions are the file types ffmpeg can decode that we treat as media.
+var mediaExtensions = map[string]bool{
+	".mp3": true, ".wav": true, ".m4a": true, ".aac": true, ".flac": true,
+	".ogg": true, ".mp4": true, ".mkv": true, ".mov": true, ".avi": true,
+}
+
+// IsMediaFile reports whether name has a media extension we accept.
+func IsMediaFile(name string) bool {
+	return mediaExtensions[strings.ToLower(filepath.Ext(name))]
+}
 
 // Decode returns mono float64 samples decoded at the given sample rate.
 // Sample values are normalised to roughly [-1.0, 1.0].

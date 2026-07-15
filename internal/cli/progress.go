@@ -61,7 +61,7 @@ func (p *progress) step(label string, fn func() error) error {
 	if err != nil {
 		symbol = "✗"
 	}
-	fmt.Fprintf(os.Stderr, "\r  %s %s  (%.1fs)          \n", symbol, label, time.Since(start).Seconds())
+	fmt.Fprintf(os.Stderr, "\r  %s %s  (%s)          \n", symbol, label, time.Since(start).Round(time.Millisecond))
 	return err
 }
 

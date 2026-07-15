@@ -11,22 +11,14 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
-	"strings"
 	"time"
 
-	"github.com/bluram/detect-engine/internal/deps"
 	"github.com/bluram/detect-engine/internal/fingerprint"
 	"github.com/bluram/detect-engine/internal/matcher"
 )
 
 // record filenames often begin with a timestamp like 2026-07-13-14-00-05_...
 var timestampRE = regexp.MustCompile(`(\d{4}-\d{2}-\d{2}-\d{2}-\d{2}-\d{2})`)
-
-// mediaExtensions are the file types accepted from -references-dir.
-var mediaExtensions = map[string]bool{
-	".mp3": true, ".wav": true, ".m4a": true, ".aac": true, ".flac": true,
-	".ogg": true, ".mp4": true, ".mkv": true, ".mov": true, ".avi": true,
-}
 
 type options struct {
 	record         string
@@ -60,10 +52,6 @@ func Run(args []string) int {
 		fmt.Fprintln(os.Stderr, "error:", err)
 		return 2
 	}
-	if err := deps.Verify(); err != nil {
-		fmt.Fprintln(os.Stderr, "error:", err)
-		return 2
-	}
 
 	prog := newProgress(opts.quiet)
 
@@ -73,15 +61,13 @@ func Run(args []string) int {
 		return 2
 	}
 
-	cfg := fingerprint.DefaultConfig()
-
-	// Fingerprint every reference first (also gives the longest, to size the record).
+	// Load every reference fingerprint (also gives the longest, to size the record).
 	var references []referenceFP
 	var warnings []string
 	maxFrames := 0
-	_ = prog.step(fmt.Sprintf("fingerprinting %d reference(s)", len(referencePaths)), func() error {
+	_ = prog.step(fmt.Sprintf("loading %d reference(s)", len(referencePaths)), func() error {
 		for _, path := range referencePaths {
-			fp, err := fingerprint.FromFile(path, cfg, true)
+			fp, err := fingerprint.LoadFile(path)
 			if err != nil {
 				warnings = append(warnings, fmt.Sprintf("skipping %s: %v", path, err))
 				continue
@@ -97,15 +83,15 @@ func Run(args []string) int {
 		fmt.Fprintln(os.Stderr, "warning:", w)
 	}
 	if len(references) == 0 {
-		fmt.Fprintln(os.Stderr, "error: no references could be fingerprinted")
+		fmt.Fprintln(os.Stderr, "error: no references could be loaded")
 		return 2
 	}
 
-	// Fingerprint the record — the slow step, so it gets its own spinner.
+	// Load the record fingerprint.
 	var recordFP *fingerprint.Fingerprint
-	err = prog.step("fingerprinting record", func() error {
+	err = prog.step("loading record", func() error {
 		var e error
-		recordFP, e = fingerprint.FromFile(opts.record, cfg, false)
+		recordFP, e = fingerprint.LoadFile(opts.record)
 		return e
 	})
 	if err != nil {
@@ -135,6 +121,7 @@ func Run(args []string) int {
 	// Human mode: stream each reference's result as it finishes.
 	prog.note("matching %d reference(s)...", len(references))
 	printHeader(os.Stdout, opts.record, len(references))
+	matchStart := time.Now()
 	results := make([]referenceResult, 0, len(references))
 	for _, q := range references {
 		detections, err := prepared.Find(q.fp, params)
@@ -143,6 +130,7 @@ func Run(args []string) int {
 		printReferenceBlock(os.Stdout, r, recordStart)
 	}
 	fmt.Fprintln(os.Stdout)
+	prog.note("matched %d reference(s) in %s", len(references), time.Since(matchStart).Round(time.Millisecond))
 	return exitCode(results)
 }
 
@@ -158,9 +146,9 @@ func exitCode(results []referenceResult) int {
 func parseArgs(args []string) (options, error) {
 	fs := flag.NewFlagSet("detect-engine", flag.ContinueOnError)
 	var opts options
-	fs.StringVar(&opts.record, "record", "", "path to the record to search in (audio or video)")
-	fs.StringVar(&opts.reference, "reference", "", "path to a single reference to find")
-	fs.StringVar(&opts.referencesDir, "references-dir", "", "directory of references to search against the record")
+	fs.StringVar(&opts.record, "record", "", "path to the record fingerprint (.bin, made by fingerprinter)")
+	fs.StringVar(&opts.reference, "reference", "", "path to a single reference fingerprint (.bin)")
+	fs.StringVar(&opts.referencesDir, "references-dir", "", "directory of reference .bin files")
 	fs.Float64Var(&opts.minScore, "min-score", 0.62, "absolute floor on overall agreement (0..1)")
 	fs.Float64Var(&opts.minSecondScore, "min-second-score", 0.40, "every 1-second block must agree at least this much")
 	fs.Float64Var(&opts.minGap, "min-gap", 0, "minimum seconds between matches (0 = 80% of reference length)")
@@ -194,7 +182,7 @@ func collectReferences(opts options) ([]string, error) {
 			if e.IsDir() {
 				continue
 			}
-			if mediaExtensions[strings.ToLower(filepath.Ext(e.Name()))] {
+			if filepath.Ext(e.Name()) == ".bin" {
 				paths = append(paths, filepath.Join(opts.referencesDir, e.Name()))
 			}
 		}
