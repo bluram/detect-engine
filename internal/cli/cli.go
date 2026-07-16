@@ -295,7 +295,7 @@ func formatTimestamp(seconds float64) string {
 
 func round(v float64, places int) float64 {
 	scale := 1.0
-	for i := 0; i < places; i++ {
+	for range places {
 		scale *= 10
 	}
 	return float64(int(v*scale+0.5)) / scale
