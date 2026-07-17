@@ -211,7 +211,7 @@ func worstSecondScore(record, reference *fingerprint.Fingerprint, offset int) fl
 // are closer than minGap (higher score wins), then sorted by position.
 func findPeaks(curve []float64, height float64, minGap int) []int {
 	var candidates []int
-	for i := 0; i < len(curve); i++ {
+	for i := range curve {
 		if curve[i] < height {
 			continue
 		}
