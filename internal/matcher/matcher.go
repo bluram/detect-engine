@@ -189,7 +189,7 @@ func worstSecondScore(record, reference *fingerprint.Fingerprint, offset int) fl
 	for start := 0; start < m; start += framesPerSecond {
 		end := min(start+framesPerSecond, m)
 		var same, count int
-		for b := 0; b < bands; b++ {
+		for b := range bands {
 			for j := start; j < end; j++ {
 				if record.Bits[b][offset+j] == reference.Bits[b][j] {
 					same++
