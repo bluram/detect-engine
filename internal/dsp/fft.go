@@ -59,7 +59,7 @@ func transform(x []complex128, inverse bool) {
 		for start := 0; start < n; start += size {
 			w := complex(1, 0)
 			half := size >> 1
-			for k := 0; k < half; k++ {
+			for k := range half {
 				a := x[start+k]
 				b := x[start+k+half] * w
 				x[start+k] = a + b
