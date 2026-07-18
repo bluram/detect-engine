@@ -11,10 +11,10 @@ func dctMatrix(numCoeffs, numFilters int) [][]float64 {
 	scale := math.Sqrt(2.0 / float64(numFilters))
 
 	matrix := make([][]float64, rows)
-	for r := 0; r < rows; r++ {
+	for r := range rows {
 		k := float64(r + 1) // +1 because coefficient 0 is skipped
 		row := make([]float64, numFilters)
-		for i := 0; i < numFilters; i++ {
+		for i := range numFilters {
 			row[i] = scale * math.Cos(math.Pi*k*(2*float64(i)+1)/(2*float64(numFilters)))
 		}
 		matrix[r] = row
