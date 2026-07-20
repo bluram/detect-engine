@@ -10,7 +10,9 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"sort"
+	"sync"
 	"time"
 
 	"github.com/bluram/detect-engine/internal/fingerprint"
@@ -109,29 +111,59 @@ func Run(args []string) int {
 
 	// JSON mode: collect everything, then emit one object.
 	if opts.asJSON {
-		results := make([]referenceResult, 0, len(references))
-		for _, q := range references {
-			detections, err := prepared.Find(q.fp, params)
-			results = append(results, referenceResult{label: q.label, detections: detections, err: err})
-		}
+		results := matchAll(prepared, references, params)
 		printJSON(os.Stdout, opts, results, recordStart)
 		return exitCode(results)
 	}
 
-	// Human mode: stream each reference's result as it finishes.
+	// Human mode: match all references (in parallel), then print in order.
 	prog.note("matching %d reference(s)...", len(references))
 	printHeader(os.Stdout, opts.record, len(references))
 	matchStart := time.Now()
-	results := make([]referenceResult, 0, len(references))
-	for _, q := range references {
-		detections, err := prepared.Find(q.fp, params)
-		r := referenceResult{label: q.label, detections: detections, err: err}
-		results = append(results, r)
+	results := matchAll(prepared, references, params)
+	for _, r := range results {
 		printReferenceBlock(os.Stdout, r, recordStart)
 	}
 	fmt.Fprintln(os.Stdout)
 	prog.note("matched %d reference(s) in %s", len(references), time.Since(matchStart).Round(time.Millisecond))
 	return exitCode(results)
+}
+
+// matchAll searches every reference against the prepared record concurrently,
+// using one worker per CPU. Results are returned in the original order.
+// This is safe because Find only reads the shared PreparedRecord and allocates
+// its own scratch buffers; the dsp FFT holds no shared state.
+func matchAll(prepared *matcher.PreparedRecord, references []referenceFP, params matcher.Params) []referenceResult {
+	results := make([]referenceResult, len(references))
+
+	workers := runtime.NumCPU()
+	if workers > len(references) {
+		workers = len(references)
+	}
+	if workers < 1 {
+		workers = 1
+	}
+
+	jobs := make(chan int)
+	var wg sync.WaitGroup
+	for w := 0; w < workers; w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := range jobs {
+				q := references[i]
+				detections, err := prepared.Find(q.fp, params)
+				results[i] = referenceResult{label: q.label, detections: detections, err: err}
+			}
+		}()
+	}
+	for i := range references {
+		jobs <- i
+	}
+	close(jobs)
+	wg.Wait()
+
+	return results
 }
 
 func exitCode(results []referenceResult) int {

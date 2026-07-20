@@ -7,9 +7,8 @@
 // noise floor, clear an absolute minimum score, and agree consistently
 // second-by-second.
 //
-// To match many references against one record, Prepare the record once (its
-// per-band FFTs are the expensive part) and reuse the PreparedRecord for every
-// reference.
+// To match many references against one record, Prepare the record once and reuse
+// the PreparedRecord for every reference.
 //
 // The package is domain-neutral: it knows nothing about what a reference or record
 // contains (a jingle, a movie, a spoken phrase, …) — only that it looks for one
@@ -55,37 +54,20 @@ type Detection struct {
 	Confidence  string  // high | medium | review | low
 }
 
-// PreparedRecord is a record fingerprint with its per-band FFTs precomputed,
-// ready to be matched against many references without recomputing the record.
+// PreparedRecord holds a record fingerprint ready to be matched against many
+// references. Matching uses overlap-save block correlation (see scoreCurve),
+// which is cache-friendly and needs no record-length precomputation.
 type PreparedRecord struct {
 	record             *fingerprint.Fingerprint
-	length             int            // FFT length (power of two)
-	maxReferenceFrames int            // longest reference this preparation supports
-	recFFT             [][]complex128 // FFT of each ±1 record band, padded to length
+	maxReferenceFrames int // longest reference this preparation supports
 }
 
-// Prepare precomputes the record's transforms. maxReferenceFrames must be at least
-// as large as the longest reference that will be matched against it.
+// Prepare wraps a record for matching. maxReferenceFrames must be at least as
+// large as the longest reference that will be matched against it.
 func Prepare(record *fingerprint.Fingerprint, maxReferenceFrames int) *PreparedRecord {
-	n := record.NumFrames()
-	bands := record.NumBands()
-	length := dsp.NextPow2(n + maxReferenceFrames)
-
-	recFFT := make([][]complex128, bands)
-	for b := 0; b < bands; b++ {
-		buf := make([]complex128, length)
-		for i := 0; i < n; i++ {
-			buf[i] = complex(float64(2*record.Bits[b][i]-1), 0)
-		}
-		dsp.FFT(buf)
-		recFFT[b] = buf
-	}
-
 	return &PreparedRecord{
 		record:             record,
-		length:             length,
 		maxReferenceFrames: maxReferenceFrames,
-		recFFT:             recFFT,
 	}
 }
 
@@ -142,38 +124,71 @@ func Find(record, reference *fingerprint.Fingerprint, p Params) ([]Detection, er
 }
 
 // scoreCurve returns the agreement fraction at every start offset of the reference
-// inside the record, reusing the record's precomputed FFTs. Cells are mapped
-// 0/1 → -1/+1 so a cross-correlation sums to (#agree − #disagree); rescaling
-// turns it into a fraction in [0, 1].
+// inside the record. Cells are mapped 0/1 → -1/+1 so a cross-correlation sums to
+// (#agree − #disagree); rescaling turns it into a fraction in [0, 1].
+//
+// It uses overlap-save block correlation: rather than one FFT the length of the
+// whole record (which thrashes memory), it slides a small, cache-sized FFT along
+// the record. The reversed ±1 reference is transformed once per band and reused
+// for every block; the bands are summed in the frequency domain so each block
+// costs one inverse FFT.
 func (pr *PreparedRecord) scoreCurve(reference *fingerprint.Fingerprint) []float64 {
-	n := pr.record.NumFrames()
+	record := pr.record
+	n := record.NumFrames()
 	m := reference.NumFrames()
-	bands := pr.record.NumBands()
+	bands := record.NumBands()
 	totalCells := float64(bands * m)
-
-	acc := make([]complex128, pr.length)
-	referenceBuf := make([]complex128, pr.length)
-
-	for b := 0; b < bands; b++ {
-		for i := range referenceBuf {
-			referenceBuf[i] = 0
-		}
-		for j := 0; j < m; j++ { // reversed → correlation via convolution
-			referenceBuf[j] = complex(float64(2*reference.Bits[b][m-1-j]-1), 0)
-		}
-		dsp.FFT(referenceBuf)
-
-		recF := pr.recFFT[b]
-		for k := 0; k < pr.length; k++ {
-			acc[k] += recF[k] * referenceBuf[k]
-		}
-	}
-	dsp.IFFT(acc)
-
 	curve := make([]float64, n-m+1)
-	for t := range curve {
-		raw := real(acc[t+m-1])
-		curve[t] = (raw + totalCells) / (2 * totalCells)
+
+	// nfft ≈ 2m keeps each transform small enough to stay in cache; a block then
+	// yields `valid` usable convolution outputs, and successive blocks advance by
+	// that much. Overlap-save prepends m-1 zeros to the record (the `pad`).
+	nfft := dsp.NextPow2(2 * m)
+	valid := nfft - m + 1
+	pad := m - 1
+
+	// Reversed ±1 reference FFT per band, computed once and reused every block.
+	refF := make([][]complex128, bands)
+	for b := 0; b < bands; b++ {
+		buf := make([]complex128, nfft)
+		for j := 0; j < m; j++ {
+			buf[j] = complex(float64(2*reference.Bits[b][m-1-j]-1), 0)
+		}
+		dsp.FFT(buf)
+		refF[b] = buf
+	}
+
+	block := make([]complex128, nfft)
+	acc := make([]complex128, nfft)
+
+	for start := 0; start < n; start += valid {
+		for k := range acc {
+			acc[k] = 0
+		}
+		for b := 0; b < bands; b++ {
+			bits := record.Bits[b]
+			for k := 0; k < nfft; k++ {
+				if p := start + k - pad; p >= 0 && p < n {
+					block[k] = complex(float64(2*bits[p]-1), 0)
+				} else {
+					block[k] = 0
+				}
+			}
+			dsp.FFT(block)
+			rf := refF[b]
+			for k := 0; k < nfft; k++ {
+				acc[k] += block[k] * rf[k]
+			}
+		}
+		dsp.IFFT(acc)
+
+		// acc[m-1 : m-1+valid] are the linear-convolution outputs y[start : start+valid];
+		// curve offset t = (y index) − pad.
+		for r := 0; r < valid; r++ {
+			if t := start + r - pad; t >= 0 && t < len(curve) {
+				curve[t] = (real(acc[m-1+r]) + totalCells) / (2 * totalCells)
+			}
+		}
 	}
 	return curve
 }
