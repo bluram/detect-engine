@@ -29,7 +29,7 @@ func MelFilterbank(numFilters, frameLen, sampleRate int, lowFreq, highFreq float
 	}
 
 	filterbank := make([][]float64, numFilters)
-	for f := 0; f < numFilters; f++ {
+	for f := range numFilters {
 		row := make([]float64, numBins)
 		left, center, right := points[f], points[f+1], points[f+2]
 		// rising edge of the triangle
