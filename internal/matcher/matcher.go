@@ -129,9 +129,10 @@ func Find(record, reference *fingerprint.Fingerprint, p Params) ([]Detection, er
 //
 // It uses overlap-save block correlation: rather than one FFT the length of the
 // whole record (which thrashes memory), it slides a small, cache-sized FFT along
-// the record. The reversed ±1 reference is transformed once per band and reused
-// for every block; the bands are summed in the frequency domain so each block
-// costs one inverse FFT.
+// the record. Because the ±1 data is real, it uses a real FFT (RFFT/IRFFT) — half
+// the transform work and half the spectrum. The reversed reference is transformed
+// once per band and reused for every block; the bands are summed in the frequency
+// domain so each block costs one inverse transform.
 func (pr *PreparedRecord) scoreCurve(reference *fingerprint.Fingerprint) []float64 {
 	record := pr.record
 	n := record.NumFrames()
@@ -142,24 +143,34 @@ func (pr *PreparedRecord) scoreCurve(reference *fingerprint.Fingerprint) []float
 
 	// nfft ≈ 2m keeps each transform small enough to stay in cache; a block then
 	// yields `valid` usable convolution outputs, and successive blocks advance by
-	// that much. Overlap-save prepends m-1 zeros to the record (the `pad`).
+	// that much. Overlap-save prepends m-1 zeros to the record (the `pad`). Working
+	// in the real half-spectrum means acc and the products are half length too.
 	nfft := dsp.NextPow2(2 * m)
 	valid := nfft - m + 1
 	pad := m - 1
+	half := nfft/2 + 1
 
-	// Reversed ±1 reference FFT per band, computed once and reused every block.
+	scratch := make([]complex128, nfft/2) // shared FFT scratch (calls are sequential)
+
+	// Reversed ±1 reference, real-FFT'd once per band and reused every block.
 	refF := make([][]complex128, bands)
+	rbuf := make([]float64, nfft)
 	for b := 0; b < bands; b++ {
-		buf := make([]complex128, nfft)
-		for j := 0; j < m; j++ {
-			buf[j] = complex(float64(2*reference.Bits[b][m-1-j]-1), 0)
+		for k := range rbuf {
+			rbuf[k] = 0
 		}
-		dsp.FFT(buf)
-		refF[b] = buf
+		for j := 0; j < m; j++ {
+			rbuf[j] = float64(2*reference.Bits[b][m-1-j] - 1)
+		}
+		coeff := make([]complex128, half)
+		dsp.RFFTInto(coeff, scratch, rbuf)
+		refF[b] = coeff
 	}
 
-	block := make([]complex128, nfft)
-	acc := make([]complex128, nfft)
+	block := make([]float64, nfft)
+	blockF := make([]complex128, half)
+	acc := make([]complex128, half)
+	y := make([]float64, nfft)
 
 	for start := 0; start < n; start += valid {
 		for k := range acc {
@@ -169,24 +180,24 @@ func (pr *PreparedRecord) scoreCurve(reference *fingerprint.Fingerprint) []float
 			bits := record.Bits[b]
 			for k := 0; k < nfft; k++ {
 				if p := start + k - pad; p >= 0 && p < n {
-					block[k] = complex(float64(2*bits[p]-1), 0)
+					block[k] = float64(2*bits[p] - 1)
 				} else {
 					block[k] = 0
 				}
 			}
-			dsp.FFT(block)
+			dsp.RFFTInto(blockF, scratch, block)
 			rf := refF[b]
-			for k := 0; k < nfft; k++ {
-				acc[k] += block[k] * rf[k]
+			for k := 0; k < half; k++ {
+				acc[k] += blockF[k] * rf[k]
 			}
 		}
-		dsp.IFFT(acc)
+		dsp.IRFFTInto(y, scratch, acc, nfft)
 
-		// acc[m-1 : m-1+valid] are the linear-convolution outputs y[start : start+valid];
-		// curve offset t = (y index) − pad.
+		// y[m-1 : m-1+valid] are the linear-convolution outputs at global indices
+		// [start : start+valid); curve offset t = (index) − pad.
 		for r := 0; r < valid; r++ {
 			if t := start + r - pad; t >= 0 && t < len(curve) {
-				curve[t] = (real(acc[m-1+r]) + totalCells) / (2 * totalCells)
+				curve[t] = (y[m-1+r] + totalCells) / (2 * totalCells)
 			}
 		}
 	}
