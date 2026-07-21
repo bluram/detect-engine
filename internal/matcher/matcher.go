@@ -150,7 +150,10 @@ func (pr *PreparedRecord) scoreCurve(reference *fingerprint.Fingerprint) []float
 	pad := m - 1
 	half := nfft/2 + 1
 
-	scratch := make([]complex128, nfft/2) // shared FFT scratch (calls are sequential)
+	// One real-FFT plan (precomputed twiddles), built once and reused for every
+	// block. scratch is shared because the transforms run sequentially here.
+	plan := dsp.NewRealPlan(nfft)
+	scratch := make([]complex128, nfft/2)
 
 	// Reversed ±1 reference, real-FFT'd once per band and reused every block.
 	refF := make([][]complex128, bands)
@@ -163,7 +166,7 @@ func (pr *PreparedRecord) scoreCurve(reference *fingerprint.Fingerprint) []float
 			rbuf[j] = float64(2*reference.Bits[b][m-1-j] - 1)
 		}
 		coeff := make([]complex128, half)
-		dsp.RFFTInto(coeff, scratch, rbuf)
+		plan.Coefficients(coeff, scratch, rbuf)
 		refF[b] = coeff
 	}
 
@@ -185,13 +188,13 @@ func (pr *PreparedRecord) scoreCurve(reference *fingerprint.Fingerprint) []float
 					block[k] = 0
 				}
 			}
-			dsp.RFFTInto(blockF, scratch, block)
+			plan.Coefficients(blockF, scratch, block)
 			rf := refF[b]
 			for k := 0; k < half; k++ {
 				acc[k] += blockF[k] * rf[k]
 			}
 		}
-		dsp.IRFFTInto(y, scratch, acc, nfft)
+		plan.Sequence(y, scratch, acc)
 
 		// y[m-1 : m-1+valid] are the linear-convolution outputs at global indices
 		// [start : start+valid); curve offset t = (index) − pad.
