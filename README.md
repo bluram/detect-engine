@@ -17,9 +17,9 @@ detect-engine -record record.mp3 -reference clip.mp3
   References : 1 searched
 
   ── clip.mp3                  ✓ 3 match(es)
-         1  17:55.0 → 18:22.0  (27.0s)   score 0.855   worst/sec 0.834   high
-         2  35:36.8 → 36:03.8  (27.0s)   score 0.835   worst/sec 0.750   medium
-         3  47:11.5 → 47:38.4  (27.0s)   score 0.813   worst/sec 0.742   medium
+         1  17:55.0 → 18:22.0  (27.0s)   score 0.842   worst/sec 0.780   high
+         2  35:36.8 → 36:03.8  (27.0s)   score 0.766   worst/sec 0.702   medium
+         3  47:11.5 → 47:38.4  (27.0s)   score 0.671   worst/sec 0.640   review
 ```
 
 Both inputs may be **audio or video** — ffmpeg extracts the audio track from
@@ -62,7 +62,7 @@ detect-engine/                  (module: github.com/bluram/detect-engine)
 └── internal/                   the shared engine (both apps reuse it)
     ├── deps/                   checks external tools (ffmpeg) are installed
     ├── audio/                  decode media → float samples (via ffmpeg) + silence trim
-    ├── dsp/                    generic signal tools: FFT, Frames, Hamming window, PowerSpectrum
+    ├── dsp/                    signal tools: FFT + real FFT (Plan/RealPlan), Frames, Hamming, PowerSpectrum
     ├── fingerprint/            the MFCC recipe → Fingerprint (+ .bin Save/Load)
     ├── matcher/                slide fingerprints, detect matches (reference in record)
     └── cli/                    flag parsing, wiring, human/JSON output
@@ -75,14 +75,17 @@ detect-engine/                  (module: github.com/bluram/detect-engine)
   never the domain (song, movie, …).
 - **`cli`** is the composition root that wires the search app together.
 
-To match **many references against one record**, `matcher.Prepare` transforms the
-record once and reuses it for every reference.
+To match **many references against one record**, the references are searched
+**concurrently** (one worker per CPU core). Matching uses cache-friendly
+**overlap-save** block correlation with a **real FFT** — many small transforms
+that stay in the CPU cache — instead of one giant record-length transform, so it
+stays fast and scales across cores.
 
 ---
 
 ## Build & run
 
-Requires **Go 1.21+** and **ffmpeg** on PATH.
+Requires **Go 1.22+** and **ffmpeg** on PATH.
 
 ```bash
 # build both programs
@@ -124,8 +127,10 @@ Provide `-reference` or `-references-dir` (at least one). **Exit codes:** `0` = 
 ### Reading the numbers
 
 - **score** — fraction of fingerprint cells that agree (1.0 identical, 0.5
-  unrelated). Clean matches land 0.80–0.95; a match with a different background
-  bed can sit 0.62–0.72 (the **review** band) and still be real.
+  unrelated). Even a near-exact match tops out around **0.80–0.86** — frame
+  alignment and re-encoding cost the rest — so 0.8+ already means "definitely
+  it". A match with a different background bed can sit 0.62–0.72 (the **review**
+  band) and still be real.
 - **worst/sec** — the weakest one-second block in the match.
 - **confidence** — `high` / `medium` / `review` / `low`. Treat **review** as
   "likely, worth a human ear", not "rejected".

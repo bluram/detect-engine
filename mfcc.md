@@ -228,13 +228,15 @@ func binarize(coeffs [][]float64) [][]int8 {
 
 ## Putting it all together
 
-Every step lives inside one loop: cut into frames, then run each frame through window → FFT → mel → log → DCT, and finally binarize the whole grid.
+Every step lives inside one loop: cut into frames, then run each frame through window → FFT → mel → log → DCT, and finally binarize the whole grid. (The framing/windowing/spectrum helpers live in a `dsp` package; the mel/DCT/binarize steps in `fingerprint`.)
 
 ```go
 func FromSamples(samples []float64, cfg Config) *Fingerprint {
-    frames := Frames(samples, cfg.FrameLen, cfg.FrameStep)
-    window := Hamming(cfg.FrameLen)
-    filterbank := MelFilterbank(cfg.NumFilters, cfg.FrameLen, cfg.SampleRate)
+    cfg = cfg.normalised()
+
+    frames := dsp.Frames(samples, cfg.FrameLen, cfg.FrameStep)
+    window := dsp.Hamming(cfg.FrameLen)
+    filterbank := MelFilterbank(cfg.NumFilters, cfg.FrameLen, cfg.SampleRate, cfg.LowFreqHz, cfg.HighFreqHz)
     dct := dctMatrix(cfg.NumCoeffs, cfg.NumFilters)
 
     bands := cfg.NumCoeffs - 1 // drop coefficient 0 (loudness)
@@ -244,8 +246,8 @@ func FromSamples(samples []float64, cfg Config) *Fingerprint {
     }
 
     for t, frame := range frames {
-        windowed := ApplyWindow(frame, window)
-        power := PowerSpectrum(windowed)
+        windowed := dsp.ApplyWindow(frame, window)
+        power := dsp.PowerSpectrum(windowed)
         logMel := MelEnergies(power, filterbank)
         for i, e := range logMel {
             if e < epsilon {
@@ -258,7 +260,11 @@ func FromSamples(samples []float64, cfg Config) *Fingerprint {
         }
     }
 
-    return &Fingerprint{Bits: binarize(coeffs)}
+    return &Fingerprint{
+        Bits:       binarize(coeffs),
+        SampleRate: cfg.SampleRate,
+        HopSamples: cfg.FrameStep,
+    }
 }
 ```
 
