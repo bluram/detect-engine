@@ -291,7 +291,7 @@ func meanStd(xs []float64) (mean, std float64) {
 
 func confidence(score, worst float64) string {
 	switch {
-	case score >= 0.85 && worst >= 0.65:
+	case score >= 0.80 && worst >= 0.65:
 		return "high"
 	case score >= 0.72:
 		return "medium"
