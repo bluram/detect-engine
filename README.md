@@ -47,6 +47,20 @@ A match must clear **three** independent bars, which keeps false positives rare:
 3. **Consistent** — every one-second block agrees (`-min-second-score`), so a
    spike that only matches on average is rejected.
 
+### Timestamps stay accurate, even through recording gaps
+
+Match times are reported against the record's **real timeline**. This matters
+because live/broadcast captures often contain **gaps** — a handful of samples, or
+several seconds, dropped during recording (a network hiccup, an overloaded
+capture box). A naive decode packs the surviving audio contiguously and
+**collapses** those gaps, so every timestamp after a gap drifts *earlier* than
+reality — a match at 14:14 in the file would be reported as 14:08.
+
+To prevent that, the decoder fills gaps with silence and anchors the start
+(ffmpeg's `aresample=async`), so decoded-sample-time equals real (container)
+time. The fingerprint's timeline therefore stays locked to the recording's own
+clock, and reported offsets are the true positions in the file.
+
 ---
 
 ## Architecture
@@ -61,7 +75,7 @@ detect-engine/                  (module: github.com/bluram/detect-engine)
 │   └── fingerprinter/          FINGERPRINT app: media file → .bin fingerprint
 └── internal/                   the shared engine (both apps reuse it)
     ├── deps/                   checks external tools (ffmpeg) are installed
-    ├── audio/                  decode media → float samples (via ffmpeg) + silence trim
+    ├── audio/                  decode media → float samples (via ffmpeg), gap-filled to keep the timeline true
     ├── dsp/                    signal tools: FFT + real FFT (Plan/RealPlan), Frames, Hamming, PowerSpectrum
     ├── fingerprint/            the MFCC recipe → Fingerprint (+ .bin Save/Load)
     ├── matcher/                slide fingerprints, detect matches (reference in record)

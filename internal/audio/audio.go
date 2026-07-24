@@ -37,6 +37,13 @@ func Decode(path string, sampleRate int) ([]float64, error) {
 		"-v", "error",
 		"-nostdin",
 		"-i", path,
+		// Preserve the true timeline. Broadcast captures can contain gaps
+		// (dropped samples during recording); a plain decode packs samples
+		// contiguously and collapses those gaps, so every later timestamp
+		// drifts earlier than real (container) time. aresample=async fills
+		// gaps with silence and first_pts=0 anchors the start, keeping decoded
+		// sample-time equal to real record time — so match timestamps are accurate.
+		"-af", "aresample=async=1:first_pts=0",
 		"-ac", "1", // mono
 		"-ar", fmt.Sprint(sampleRate), // target sample rate
 		"-f", "f32le", // raw 32-bit float, little-endian
