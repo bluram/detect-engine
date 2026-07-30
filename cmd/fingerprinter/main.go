@@ -57,7 +57,7 @@ func run(args []string) int {
 		return 2
 	}
 
-	cfg := fingerprint.DefaultConfig()
+	cfg := audio.DefaultConfig()
 	var done, skipped, failed int
 	for _, j := range jobs {
 		if !*force && upToDate(j.dst, j.src) {
@@ -66,7 +66,7 @@ func run(args []string) int {
 			continue
 		}
 		start := time.Now()
-		fp, err := fingerprint.FromFile(j.src, cfg, false)
+		fp, err := audio.FromFile(j.src, cfg, false)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "✗  %-40s  %v\n", filepath.Base(j.src), err)
 			failed++

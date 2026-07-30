@@ -1,7 +1,13 @@
-// Package audio decodes media files into mono float samples using ffmpeg.
+// Package audio is the audio path of the engine: it decodes media files into
+// mono float samples using ffmpeg (audio.go) and turns those samples into a
+// binary fingerprint via the MFCC pipeline (mfcc.go, mel.go, dct.go).
 //
 // ffmpeg is invoked as a subprocess, so any format it understands works —
 // including video files, whose audio track is extracted automatically.
+//
+// It produces the media-neutral fingerprint.Fingerprint type, so the matcher and
+// the .bin store work on its output unchanged. A future video path would mirror
+// this package: decode → hash → the same Fingerprint.
 package audio
 
 import (

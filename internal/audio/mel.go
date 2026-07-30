@@ -1,7 +1,4 @@
-// Package fingerprint turns audio into a compact fingerprint using the MFCC
-// recipe (mel bands → log → DCT → binarize). It builds on the generic tools in
-// the dsp package.
-package fingerprint
+package audio
 
 import "math"
 
@@ -10,11 +7,11 @@ import "math"
 func hzToMel(hz float64) float64  { return 2595 * math.Log10(1+hz/700) }
 func melToHz(mel float64) float64 { return 700 * (math.Pow(10, mel/2595) - 1) }
 
-// MelFilterbank builds numFilters triangular filters, spaced evenly on the mel
+// melFilterbank builds numFilters triangular filters, spaced evenly on the mel
 // scale between lowFreq and highFreq. Each returned row has numBins weights
 // (numBins = frameLen/2 + 1) to be multiplied with a power spectrum.
 // Low filters come out narrow, high filters wide — just like human hearing.
-func MelFilterbank(numFilters, frameLen, sampleRate int, lowFreq, highFreq float64) [][]float64 {
+func melFilterbank(numFilters, frameLen, sampleRate int, lowFreq, highFreq float64) [][]float64 {
 	numBins := frameLen/2 + 1
 
 	lowMel := hzToMel(lowFreq)
@@ -49,9 +46,9 @@ func MelFilterbank(numFilters, frameLen, sampleRate int, lowFreq, highFreq float
 	return filterbank
 }
 
-// MelEnergies applies the filterbank to a power spectrum, returning one energy
+// melEnergies applies the filterbank to a power spectrum, returning one energy
 // number per mel band (power weighted by each triangle, then summed).
-func MelEnergies(power []float64, filterbank [][]float64) []float64 {
+func melEnergies(power []float64, filterbank [][]float64) []float64 {
 	energies := make([]float64, len(filterbank))
 	for f, row := range filterbank {
 		var sum float64
