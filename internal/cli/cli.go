@@ -136,13 +136,7 @@ func Run(args []string) int {
 func matchAll(prepared *matcher.PreparedRecord, references []referenceFP, params matcher.Params) []referenceResult {
 	results := make([]referenceResult, len(references))
 
-	workers := runtime.NumCPU()
-	if workers > len(references) {
-		workers = len(references)
-	}
-	if workers < 1 {
-		workers = 1
-	}
+	workers := max(1, min(runtime.NumCPU(), len(references)))
 
 	jobs := make(chan int)
 	var wg sync.WaitGroup
