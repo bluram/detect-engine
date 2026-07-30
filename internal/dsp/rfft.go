@@ -42,11 +42,11 @@ func (p *RealPlan) Len() int { return p.n }
 // (len n/2+1), using scratch (len n/2) for the internal complex FFT.
 func (p *RealPlan) Coefficients(dst, scratch []complex128, x []float64) {
 	m := p.n / 2
-	for j := 0; j < m; j++ { // even samples → real, odd samples → imaginary
+	for j := range m { // even samples → real, odd samples → imaginary
 		scratch[j] = complex(x[2*j], x[2*j+1])
 	}
 	p.c.FFT(scratch)
-	for k := 0; k <= m; k++ {
+	for k := range m + 1 {
 		zk := scratch[k%m]
 		zmk := cmplx.Conj(scratch[(m-k)%m])
 		even := (zk + zmk) * 0.5
@@ -59,7 +59,7 @@ func (p *RealPlan) Coefficients(dst, scratch []complex128, x []float64) {
 // (len n), using scratch (len n/2).
 func (p *RealPlan) Sequence(dst []float64, scratch, coeff []complex128) {
 	m := p.n / 2
-	for k := 0; k < m; k++ {
+	for k := range m {
 		xk := coeff[k]
 		xmk := cmplx.Conj(coeff[m-k]) // for k==0 this reads coeff[m]
 		even := (xk + xmk) * 0.5
@@ -67,7 +67,7 @@ func (p *RealPlan) Sequence(dst []float64, scratch, coeff []complex128) {
 		scratch[k] = even + complex(0, 1)*odd
 	}
 	p.c.IFFT(scratch)
-	for j := 0; j < m; j++ {
+	for j := range m {
 		dst[2*j] = real(scratch[j])
 		dst[2*j+1] = imag(scratch[j])
 	}
