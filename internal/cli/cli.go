@@ -140,16 +140,14 @@ func matchAll(prepared *matcher.PreparedRecord, references []referenceFP, params
 
 	jobs := make(chan int)
 	var wg sync.WaitGroup
-	for w := 0; w < workers; w++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+	for range workers {
+		wg.Go(func() {
 			for i := range jobs {
 				q := references[i]
 				detections, err := prepared.Find(q.fp, params)
 				results[i] = referenceResult{label: q.label, detections: detections, err: err}
 			}
-		}()
+		})
 	}
 	for i := range references {
 		jobs <- i
