@@ -32,6 +32,16 @@ func (f *Fingerprint) FrameToSeconds(frame int) float64 {
 	return float64(frame) * float64(f.HopSamples) / float64(f.SampleRate)
 }
 
+// SecondsToFrame converts a time in seconds into the nearest frame index — the
+// inverse of FrameToSeconds. Useful to look up one modality's position from a
+// time reported by another modality.
+func (f *Fingerprint) SecondsToFrame(sec float64) int {
+	if f.HopSamples == 0 {
+		return 0
+	}
+	return int(sec*float64(f.SampleRate)/float64(f.HopSamples) + 0.5)
+}
+
 // DurationSeconds returns the fingerprint's length in seconds.
 func (f *Fingerprint) DurationSeconds() float64 {
 	return f.FrameToSeconds(f.NumFrames())

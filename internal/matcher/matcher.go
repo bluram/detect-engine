@@ -123,6 +123,60 @@ func Find(record, reference *fingerprint.Fingerprint, p Params) ([]Detection, er
 	return Prepare(record, reference.NumFrames()).Find(reference, p)
 }
 
+// rawScore returns the agreement fraction of reference against the record at a
+// frame offset, or 0 when the offset is out of range.
+func (pr *PreparedRecord) rawScore(reference *fingerprint.Fingerprint, off int) float64 {
+	record := pr.record
+	m := reference.NumFrames()
+	if m == 0 || off < 0 || off+m > record.NumFrames() || reference.NumBands() != record.NumBands() {
+		return 0
+	}
+	bands := reference.NumBands()
+	var same, total int
+	for b := range bands {
+		rb := record.Bits[b]
+		fb := reference.Bits[b]
+		for j := range m {
+			if rb[off+j] == fb[j] {
+				same++
+			}
+			total++
+		}
+	}
+	if total == 0 {
+		return 0
+	}
+	return float64(same) / float64(total)
+}
+
+// BestScoreNear scans frame offsets within radius of center and returns the
+// highest agreement score, plus the weakest-second at that best offset, applying
+// NO thresholds. It lets one modality report a fair score near a time another
+// modality matched, tolerating the small alignment difference between the two
+// (audio is very sensitive to a fraction-of-a-second shift). So no score is
+// hidden behind a blank.
+func (pr *PreparedRecord) BestScoreNear(reference *fingerprint.Fingerprint, center, radius int) (score, worst float64) {
+	m := reference.NumFrames()
+	if m == 0 || m > pr.record.NumFrames() || reference.NumBands() != pr.record.NumBands() {
+		return 0, 0
+	}
+	bestScore := -1.0
+	bestOff := center
+	for off := center - radius; off <= center+radius; off++ {
+		if off < 0 || off+m > pr.record.NumFrames() {
+			continue
+		}
+		if s := pr.rawScore(reference, off); s > bestScore {
+			bestScore = s
+			bestOff = off
+		}
+	}
+	if bestScore < 0 {
+		return 0, 0
+	}
+	return bestScore, worstSecondScore(pr.record, reference, bestOff)
+}
+
 // scoreCurve returns the agreement fraction at every start offset of the reference
 // inside the record. Cells are mapped 0/1 → -1/+1 so a cross-correlation sums to
 // (#agree − #disagree); rescaling turns it into a fraction in [0, 1].
