@@ -1,4 +1,4 @@
-// Command detect searches one recording for known adverts and reports where they
+// Command detect searches one recording for known references and reports where they
 // aired. Its -mode says what kind of content it is:
 //
 //   - -mode audio : match the sound only (radio) → one audio score.
@@ -12,7 +12,7 @@
 //
 // It finds fingerprints by name convention. Given -record rec.mp4 it loads
 // rec.mp4.audio.bin (and rec.mp4.video.bin in video mode); in -references it
-// pairs each advert's .audio.bin ↔ .video.bin by base name.
+// pairs each reference's .audio.bin ↔ .video.bin by base name.
 //
 //	detect -mode audio -record rec.mp3 -references references/audio
 //	detect -mode video -record rec.mp4 -references references/video
@@ -86,8 +86,8 @@ func run(args []string) int {
 type side struct {
 	prepared *matcher.PreparedRecord
 	record   *fingerprint.Fingerprint
-	refs     map[string]*fingerprint.Fingerprint // advertKey → reference
-	dets     map[string][]matcher.Detection      // advertKey → detections
+	refs     map[string]*fingerprint.Fingerprint // referenceKey → reference
+	dets     map[string][]matcher.Detection      // referenceKey → detections
 }
 
 // loadSide loads the record fingerprint for one modality and matches it against
@@ -122,7 +122,7 @@ func loadSide(recordBin, refsDir, kind string) (*side, error) {
 		if fp.NumFrames() > maxFrames {
 			maxFrames = fp.NumFrames()
 		}
-		refs[advertKey(e.Name())] = fp
+		refs[referenceKey(e.Name())] = fp
 	}
 
 	prepared := matcher.Prepare(record, maxFrames)
@@ -155,15 +155,15 @@ func detCell(d matcher.Detection) *cell {
 	return &cell{score: d.Score, worst: d.WorstSecond, conf: d.Confidence, real: true}
 }
 
-// row is one air-time of one advert, with a cell per modality.
+// row is one air-time of one reference, with a cell per modality.
 type row struct {
-	advert string
-	start  float64
-	audio  *cell
-	video  *cell
+	reference string
+	start     float64
+	audio     *cell
+	video     *cell
 }
 
-// combine joins audio and video detections of the same advert by overlapping
+// combine joins audio and video detections of the same reference by overlapping
 // air-time, then fills any blank side by looking up its real score at that time.
 func combine(audioSide, videoSide *side) []row {
 	var audioDets, videoDets map[string][]matcher.Detection
@@ -199,14 +199,14 @@ func combine(audioSide, videoSide *side) []row {
 			}
 			if paired >= 0 {
 				usedV[paired] = true
-				rows = append(rows, row{advert: key, start: a.TimeSeconds, audio: detCell(a), video: detCell(vDets[paired])})
+				rows = append(rows, row{reference: key, start: a.TimeSeconds, audio: detCell(a), video: detCell(vDets[paired])})
 			} else {
-				rows = append(rows, row{advert: key, start: a.TimeSeconds, audio: detCell(a)})
+				rows = append(rows, row{reference: key, start: a.TimeSeconds, audio: detCell(a)})
 			}
 		}
 		for j := range vDets {
 			if !usedV[j] {
-				rows = append(rows, row{advert: key, start: vDets[j].TimeSeconds, video: detCell(vDets[j])})
+				rows = append(rows, row{reference: key, start: vDets[j].TimeSeconds, video: detCell(vDets[j])})
 			}
 		}
 	}
@@ -215,10 +215,10 @@ func combine(audioSide, videoSide *side) []row {
 	for i := range rows {
 		r := &rows[i]
 		if r.audio == nil {
-			r.audio = lookup(audioSide, r.advert, r.start)
+			r.audio = lookup(audioSide, r.reference, r.start)
 		}
 		if r.video == nil {
-			r.video = lookup(videoSide, r.advert, r.start)
+			r.video = lookup(videoSide, r.reference, r.start)
 		}
 	}
 
@@ -226,13 +226,13 @@ func combine(audioSide, videoSide *side) []row {
 	return rows
 }
 
-// lookup returns the score of one side's reference at a time, or nil when that
-// side has no reference for the advert (a genuine blank).
-func lookup(s *side, advert string, timeSec float64) *cell {
+// lookup returns one side's score for the reference identified by key at a time,
+// or nil when that side has no fingerprint for it (a genuine blank).
+func lookup(s *side, key string, timeSec float64) *cell {
 	if s == nil {
 		return nil
 	}
-	ref, ok := s.refs[advert]
+	ref, ok := s.refs[key]
 	if !ok {
 		return nil
 	}
@@ -250,7 +250,7 @@ func overlaps(a, b matcher.Detection) bool {
 }
 
 func printTable(rows []row) {
-	fmt.Printf("\n  %-26s %-9s  %-8s  %-8s  %s\n", "Advert", "Time", "Audio", "Video", "Verdict")
+	fmt.Printf("\n  %-26s %-9s  %-8s  %-8s  %s\n", "Reference", "Time", "Audio", "Video", "Verdict")
 	fmt.Printf("  %s\n", strings.Repeat("─", 74))
 	if len(rows) == 0 {
 		fmt.Println("  (no detections)")
@@ -259,7 +259,7 @@ func printTable(rows []row) {
 	}
 	for _, r := range rows {
 		fmt.Printf("  %-26s %-9s  %-8s  %-8s  %s\n",
-			displayName(r.advert), clock(r.start),
+			displayName(r.reference), clock(r.start),
 			scoreCell(r.audio), scoreCell(r.video), verdict(r.audio, r.video))
 	}
 	fmt.Println()
@@ -333,7 +333,7 @@ func printJSON(rows []row, mode, record string) {
 		Detected    bool    `json:"detected"`
 	}
 	type jsonDetection struct {
-		Advert       string    `json:"advert"`
+		Reference    string    `json:"reference"`
 		StartSeconds float64   `json:"start_seconds"`
 		Audio        *jsonSide `json:"audio"`
 		Video        *jsonSide `json:"video"`
@@ -360,7 +360,7 @@ func printJSON(rows []row, mode, record string) {
 
 	for _, r := range rows {
 		out.Detections = append(out.Detections, jsonDetection{
-			Advert:       r.advert,
+			Reference:    r.reference,
 			StartSeconds: round(r.start, 2),
 			Audio:        toSide(r.audio),
 			Video:        toSide(r.video),
@@ -399,9 +399,9 @@ func classify(name string) string {
 	}
 }
 
-// advertKey strips the modality suffix from a reference filename so the audio and
-// video fingerprints of the same advert share one key.
-func advertKey(name string) string {
+// referenceKey strips the modality suffix from a reference filename so the audio and
+// video fingerprints of the same reference share one key.
+func referenceKey(name string) string {
 	name = filepath.Base(name)
 	for _, s := range []string{".video.bin", ".audio.bin", ".bin"} {
 		if strings.HasSuffix(name, s) {

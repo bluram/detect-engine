@@ -11,7 +11,7 @@ type Config struct {
 }
 
 // DefaultConfig returns an 8×8 dHash (64 bits) sampled at 3 frames per second —
-// enough time resolution for adverts, and a tiny, robust fingerprint.
+// enough time resolution for short clips, and a tiny, robust fingerprint.
 func DefaultConfig() Config {
 	return Config{Fps: 3, HashW: 8, HashH: 8}
 }
