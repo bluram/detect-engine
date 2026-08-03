@@ -15,6 +15,7 @@
 package main
 
 import (
+	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
@@ -33,6 +34,7 @@ func run(args []string) int {
 	mode := fs.String("mode", "", `"audio" (sound only) or "video" (picture + sound)`)
 	record := fs.String("record", "", "recording media path or fingerprint base")
 	references := fs.String("references", "", "folder of reference fingerprints")
+	asJSON := fs.Bool("json", false, "emit results as JSON instead of a table")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -64,7 +66,11 @@ func run(args []string) int {
 	}
 
 	rows := combine(audioDets, videoDets)
-	printTable(rows, *mode)
+	if *asJSON {
+		printJSON(rows, *mode, *record)
+	} else {
+		printTable(rows)
+	}
 	if len(rows) == 0 {
 		return 1
 	}
@@ -222,7 +228,7 @@ func overlaps(a, b matcher.Detection) bool {
 	return a.TimeSeconds < b.EndSeconds && b.TimeSeconds < a.EndSeconds
 }
 
-func printTable(rows []row, mode string) {
+func printTable(rows []row) {
 	fmt.Printf("\n  %-26s %-9s  %-6s  %-6s  %s\n", "Advert", "Time", "Audio", "Video", "Verdict")
 	fmt.Printf("  %s\n", strings.Repeat("─", 72))
 	if len(rows) == 0 {
@@ -233,7 +239,7 @@ func printTable(rows []row, mode string) {
 	for _, r := range rows {
 		fmt.Printf("  %-26s %-9s  %-6s  %-6s  %s\n",
 			displayName(r.advert), clock(r.start),
-			scoreCell(r.audio), scoreCell(r.video), verdict(r.audio, r.video, mode))
+			scoreCell(r.audio), scoreCell(r.video), verdict(r.audio, r.video))
 	}
 	fmt.Println()
 }
@@ -253,20 +259,34 @@ func scoreCell(d *matcher.Detection) string {
 	return fmt.Sprintf("%.3f", d.Score)
 }
 
-func verdict(a, v *matcher.Detection, mode string) string {
-	if mode == "audio" {
-		return a.Confidence // audio-only run: the audio confidence is the verdict
+// verdict reduces the match to a single word: confident | review | low. Which
+// side(s) matched is already visible in the Audio/Video columns, so the word
+// only conveys strength.
+func verdict(a, v *matcher.Detection) string {
+	word := func(c string) string {
+		switch c {
+		case "high":
+			return "confident"
+		case "low":
+			return "low"
+		default: // medium, review
+			return "review"
+		}
 	}
 	switch {
 	case a != nil && v != nil:
-		if a.Confidence == "high" && v.Confidence == "high" {
-			return "confirmed (audio + video)"
+		switch {
+		case a.Confidence == "high" && v.Confidence == "high":
+			return "confident"
+		case a.Confidence == "low" || v.Confidence == "low":
+			return "low"
+		default:
+			return "review"
 		}
-		return "review (weak on one side)"
 	case a != nil:
-		return "audio-only (no video match)"
+		return word(a.Confidence)
 	default:
-		return "video-only"
+		return word(v.Confidence)
 	}
 }
 
@@ -274,4 +294,64 @@ func clock(seconds float64) string {
 	m := int(seconds) / 60
 	s := seconds - float64(m*60)
 	return fmt.Sprintf("%02d:%04.1f", m, s)
+}
+
+// printJSON emits the same rows as a machine-readable object (for the web seed
+// and other tools). Each side is null when that modality did not match.
+func printJSON(rows []row, mode, record string) {
+	type side struct {
+		Score        float64 `json:"score"`
+		WorstSecond  float64 `json:"worst_second"`
+		Confidence   string  `json:"confidence"`
+		StartSeconds float64 `json:"start_seconds"`
+		EndSeconds   float64 `json:"end_seconds"`
+	}
+	type detection struct {
+		Advert       string  `json:"advert"`
+		StartSeconds float64 `json:"start_seconds"`
+		Audio        *side   `json:"audio"`
+		Video        *side   `json:"video"`
+		Verdict      string  `json:"verdict"`
+	}
+
+	toSide := func(d *matcher.Detection) *side {
+		if d == nil {
+			return nil
+		}
+		return &side{
+			Score:        round(d.Score, 4),
+			WorstSecond:  round(d.WorstSecond, 4),
+			Confidence:   d.Confidence,
+			StartSeconds: round(d.TimeSeconds, 2),
+			EndSeconds:   round(d.EndSeconds, 2),
+		}
+	}
+
+	out := struct {
+		Mode       string      `json:"mode"`
+		Record     string      `json:"record"`
+		Detections []detection `json:"detections"`
+	}{Mode: mode, Record: record, Detections: []detection{}}
+
+	for _, r := range rows {
+		out.Detections = append(out.Detections, detection{
+			Advert:       r.advert,
+			StartSeconds: round(r.start, 2),
+			Audio:        toSide(r.audio),
+			Video:        toSide(r.video),
+			Verdict:      verdict(r.audio, r.video),
+		})
+	}
+
+	enc := json.NewEncoder(os.Stdout)
+	enc.SetIndent("", "  ")
+	_ = enc.Encode(out)
+}
+
+func round(v float64, places int) float64 {
+	scale := 1.0
+	for range places {
+		scale *= 10
+	}
+	return float64(int(v*scale+0.5)) / scale
 }
