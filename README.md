@@ -3,48 +3,63 @@
 Find where a short **reference** clip occurs inside a long **record** — a
 Shazam-style media matcher, written from scratch in Go.
 
-The engine is **domain-neutral**: it doesn't know or care what the audio *is*
-(a song, a movie, a jingle, a spoken phrase …). You give it two files; it
-reports the timestamps where the reference occurs in the record, each with a
-confidence score.
+The engine is **domain-neutral**: it doesn't know or care what the media *is*
+(a song, a movie, a jingle, a spoken phrase …). You give it a record and a set
+of references; it reports the timestamps where each reference occurs in the
+record, each with a confidence score.
+
+It matches on **two independent modalities**:
+
+- **audio** — an MFCC fingerprint of the *sound* (radio, or the sound track of
+  a video).
+- **video** — a dHash (perceptual hash) fingerprint of the *picture*.
+
+Both modalities produce the **same** binary fingerprint type, so one matcher
+and one on-disk format serve both. A recording is fingerprinted once, then
+matched against many references.
 
 ```
-detect-engine -record record.mp3 -reference clip.mp3
+  Reference                  Time       Audio     Video     Verdict
+  ──────────────────────────────────────────────────────────────────────────
+  wolt-popysia               10:14.3    0.791     0.865     review
+  Investaz_ozune_yatirim_et… 10:40.4    0.788     0.825     review
+  Clear_man_-_Fifa_resmi_sp… 12:42.6    0.797     0.800     review
+  Via_Uomo_-_kisi_geyimleri… 36:49.8    0.791     0.892     review
 ```
-
-```
-  Record     : record.mp3
-  References : 1 searched
-
-  ── clip.mp3                  ✓ 3 match(es)
-         1  17:55.0 → 18:22.0  (27.0s)   score 0.842   worst/sec 0.780   high
-         2  35:36.8 → 36:03.8  (27.0s)   score 0.766   worst/sec 0.702   medium
-         3  47:11.5 → 47:38.4  (27.0s)   score 0.671   worst/sec 0.640   review
-```
-
-Both inputs may be **audio or video** — ffmpeg extracts the audio track from
-video automatically.
 
 ---
 
 ## How it works
 
-Both files are turned into a **fingerprint**: a grid of 1s and 0s (MFCC) that
-captures the *shape* of the sound over time while ignoring loudness and noise.
-The reference's fingerprint is slid across the record's; wherever they line up
-strongly enough, that's a match.
+Every file is turned into a **fingerprint**: a grid of 1s and 0s
+(`[band][frame]`) that captures the *shape* of the media over time while
+ignoring loudness, colour, resolution and noise. The reference's fingerprint is
+slid across the record's; wherever they line up strongly enough, that's a match.
+
+Two pipelines fill the same grid:
 
 ```
-decode → frame → window → FFT power spectrum → mel bands → log → DCT → binarize → fingerprint
-                                                                                      │
-                                          slide (FFT cross-correlation) ─────────────┘→ matches
+audio:  decode → frame → window → FFT power → mel bands → log → DCT → binarize ┐
+                                                                                 ├─→ fingerprint
+video:  decode frames → shrink + grayscale → dHash (pixel > right neighbour) ───┘        │
+                                                                                          │
+                                              slide (FFT cross-correlation) ──────────────┘→ matches
 ```
+
+- **Audio (MFCC).** ffmpeg decodes the sound to samples; each short frame is
+  windowed, transformed to a power spectrum, mapped onto mel bands, log-scaled,
+  DCT'd, and binarized. See [`mfcc.md`](mfcc.md) for the full recipe.
+- **Video (dHash).** ffmpeg samples 3 frames/second and scales each down to a
+  tiny 9×8 grayscale image. Within each frame every pixel is compared to its
+  right neighbour (brighter → 1, darker → 0), giving 64 bits per frame. The
+  shrink discards resolution (360p and 720p of the same clip hash alike) and
+  grayscale drops colour, keeping only the stable brightness structure.
 
 A match must clear **three** independent bars, which keeps false positives rare:
 
 1. **Stands out** — a peak above the record's own noise floor (`mean + k·std`).
-2. **Strong enough** — overall agreement above an absolute floor (`-min-score`).
-3. **Consistent** — every one-second block agrees (`-min-second-score`), so a
+2. **Strong enough** — overall agreement above an absolute floor (`MinScore`).
+3. **Consistent** — every one-second block agrees (`MinSecondScore`), so a
    spike that only matches on average is rejected.
 
 ### Timestamps stay accurate, even through recording gaps
@@ -66,88 +81,133 @@ clock, and reported offsets are the true positions in the file.
 ## Architecture
 
 Each package has one job, and dependencies flow one way
-(`cli → matcher → fingerprint → dsp`; nothing points back).
+(`cmd → matcher → fingerprint → dsp`; nothing points back).
 
 ```
 detect-engine/                  (module: github.com/bluram/detect-engine)
 ├── cmd/                        the programs (one folder = one binary)
-│   ├── detect-engine/          SEARCH app: find references in a record
-│   └── fingerprinter/          FINGERPRINT app: media file → .bin fingerprint
+│   ├── detect/                 SEARCH app: find references in a record
+│   └── fingerprinter/          FINGERPRINT app: media file → .bin fingerprint(s)
 └── internal/                   the shared engine (both apps reuse it)
     ├── deps/                   checks external tools (ffmpeg) are installed
-    ├── audio/                  decode media → float samples (via ffmpeg), gap-filled to keep the timeline true
+    ├── audio/                  decode sound → float samples (via ffmpeg) → MFCC fingerprint
+    ├── video/                  decode frames → grayscale → dHash fingerprint
     ├── dsp/                    signal tools: FFT + real FFT (Plan/RealPlan), Frames, Hamming, PowerSpectrum
-    ├── fingerprint/            the MFCC recipe → Fingerprint (+ .bin Save/Load)
-    ├── matcher/                slide fingerprints, detect matches (reference in record)
-    └── cli/                    flag parsing, wiring, human/JSON output
+    ├── fingerprint/            the media-neutral Fingerprint type (+ .bin Save/Load)
+    └── matcher/                slide fingerprints, detect matches (reference in record)
 ```
 
 - **`cmd/`** holds the programs; **`internal/`** holds the engine they share.
 - **`dsp`** knows nothing about fingerprints — it's reusable signal math.
-- **`fingerprint`** builds on `dsp`, produces the fingerprint, and saves/loads `.bin`.
-- **`matcher`** compares two fingerprints; it speaks only *reference* and *record*,
-  never the domain (song, movie, …).
-- **`cli`** is the composition root that wires the search app together.
+- **`fingerprint`** is the shared bit grid + timing metadata; both `audio` and
+  `video` produce it, and it saves/loads `.bin`.
+- **`audio`** builds the MFCC fingerprint; **`video`** builds the dHash
+  fingerprint. They differ only in how the bit grid is filled.
+- **`matcher`** compares two fingerprints; it speaks only *reference* and
+  *record*, and is blind to both the domain (song, movie, …) and the modality
+  (audio or video).
 
-To match **many references against one record**, the references are searched
-**concurrently** (one worker per CPU core). Matching uses cache-friendly
+To match **many references against one record**, matching uses cache-friendly
 **overlap-save** block correlation with a **real FFT** — many small transforms
 that stay in the CPU cache — instead of one giant record-length transform, so it
-stays fast and scales across cores.
+stays fast.
 
 ---
 
 ## Build & run
 
-Requires **Go 1.22+** and **ffmpeg** on PATH.
+Requires **Go 1.22+** and **ffmpeg** (and **ffprobe**) on PATH.
 
 ```bash
 # build both programs
-go build -o bin/detect-engine  ./cmd/detect-engine
+go build -o bin/detect         ./cmd/detect
 go build -o bin/fingerprinter  ./cmd/fingerprinter
-
-# 1. fingerprint the record(s) AND the reference(s) into .bin files
-./bin/fingerprinter -in-dir ./records      # → records/*.bin   (skips up-to-date ones)
-./bin/fingerprinter -in-dir ./clips        # → clips/*.bin
-
-# 2. search — loads .bin only (no decoding, no ffmpeg)
-./bin/detect-engine -record records/rec.mp3.bin -reference clips/clip.mp3.bin
-./bin/detect-engine -record records/rec.mp3.bin -references-dir ./clips   # folder of .bin references
 ```
 
-Only the **fingerprinter** touches ffmpeg. The **search** consumes `.bin` files, so
-records and references are fingerprinted once and matched many times.
+The workflow is two steps: **fingerprint once**, then **search many times**.
+
+### 1. Fingerprint (touches ffmpeg)
+
+The fingerprinter auto-detects each file's tracks and writes one `.bin` per
+modality next to the source: a video file yields `<file>.audio.bin` **and**
+`<file>.video.bin`; an audio-only file yields just `<file>.audio.bin`.
+
+```bash
+# a single file (auto by content)
+./bin/fingerprinter -in records/video/rec.mp4     # → rec.mp4.audio.bin + rec.mp4.video.bin
+./bin/fingerprinter -in references/audio/ad.mp3   # → ad.mp3.audio.bin
+
+# a whole folder
+./bin/fingerprinter -in-dir ./references/video
+
+# restrict what gets written
+./bin/fingerprinter -in records/video/rec.mp4 -type audio        # audio only
+./bin/fingerprinter -in records/video/rec.mp4 -type audio,video  # both
+```
+
+Up-to-date `.bin` files are skipped unless `-force` is given.
+
+### 2. Search (loads `.bin` only — no ffmpeg, no decoding)
+
+`detect` takes a `-record` (a media path or a fingerprint base — the suffix is
+stripped either way) and a `-references` folder. `-mode` says what to match:
+
+```bash
+# radio: match sound only → one audio score
+./bin/detect -mode audio -record records/audio/rec.mp3 -references references/audio
+
+# TV: match picture AND sound → both scores + a verdict
+./bin/detect -mode video -record records/video/rec.mp4 -references references/video
+```
+
+Given `-record rec.mp4`, detect loads `rec.mp4.audio.bin` (and, in video mode,
+`rec.mp4.video.bin`), and pairs each reference's `.audio.bin` ↔ `.video.bin` by
+base name. In **video** mode the audio side still runs (a video has both
+tracks), so both scores are reported for every air-time.
+
 Each program is a single self-contained binary (no external Go libraries).
 
 ### Flags
 
+**`detect`**
+
 | Flag | Default | Meaning |
 |------|---------|---------|
-| `-record` | — | the record to search in (audio or video). **Required.** |
-| `-reference` | — | a single reference to find (audio or video) |
-| `-references-dir` | — | a directory of references to search against the record |
-| `-min-score` | `0.62` | absolute floor on overall agreement (0–1) |
-| `-min-second-score` | `0.40` | every 1-second block must agree at least this much |
-| `-min-gap` | reference×0.8 | minimum seconds between two matches |
-| `-json` | off | machine-readable output |
-| `-quiet` | off | suppress the live progress output |
+| `-mode` | — | `audio` (sound only) or `video` (picture + sound). **Required.** |
+| `-record` | — | recording media path or fingerprint base. **Required.** |
+| `-references` | — | folder of reference fingerprints. **Required.** |
+| `-json` | off | emit results as JSON instead of a table |
 
-Progress (spinner + per-step timing) is shown on stderr while the record is
-being fingerprinted, and switches off automatically when output is piped.
+**Exit codes:** `0` = at least one detection · `1` = nothing found · `2` =
+usage/error.
 
-Provide `-reference` or `-references-dir` (at least one). **Exit codes:** `0` = found ·
-`1` = not found · `2` = usage/error.
+**`fingerprinter`**
+
+| Flag | Default | Meaning |
+|------|---------|---------|
+| `-in` | — | a single media file to fingerprint |
+| `-in-dir` | — | a folder of media files to fingerprint |
+| `-out` | — | output path (only valid with a single `-in` and a single `-type`) |
+| `-type` | auto | restrict output: `audio`, `video`, or `audio,video` |
+| `-force` | off | re-fingerprint even if an up-to-date `.bin` exists |
 
 ### Reading the numbers
 
-- **score** — fraction of fingerprint cells that agree (1.0 identical, 0.5
-  unrelated). Even a near-exact match tops out around **0.80–0.86** — frame
-  alignment and re-encoding cost the rest — so 0.8+ already means "definitely
-  it". A match with a different background bed can sit 0.62–0.72 (the **review**
-  band) and still be real.
-- **worst/sec** — the weakest one-second block in the match.
-- **confidence** — `high` / `medium` / `review` / `low`. Treat **review** as
-  "likely, worth a human ear", not "rejected".
+- **Audio / Video score** — fraction of fingerprint cells that agree (1.0
+  identical, 0.5 unrelated). Even a near-exact match tops out around
+  **0.80–0.86** — frame alignment and re-encoding cost the rest — so 0.8+
+  already means "definitely it". A match with a different background bed or a
+  re-cut picture can sit lower and still be real. **No score is hidden:** when
+  one modality clears the filters but the other doesn't, the other side's actual
+  score at that time is looked up and still shown, so a variant (same sound,
+  changed picture, or vice versa) is visible instead of a blank. A dash (`–`)
+  means there is no reference for that side at all.
+- **Verdict** — one word summarising the sides that actually detected:
+  `confident` (both high) · `review` (likely, worth a human check) · `low`.
+  Looked-up sub-threshold scores don't count as confirmations.
+
+The matcher's detection thresholds (`MinScore` 0.62, `MinSecondScore` 0.40,
+peak `≥ mean + 5·std`) live in `matcher.DefaultParams()`.
 
 ---
 
@@ -157,6 +217,9 @@ Provide `-reference` or `-references-dir` (at least one). **Exit codes:** `0` = 
 go test ./...
 ```
 
-Covers the FFT round-trip, spectrum peak detection, fingerprint determinism, and
-an end-to-end matcher check (a reference embedded in a record is found at the right
-offset, including many references against one prepared record).
+Covers the FFT round-trip, spectrum peak detection, fingerprint determinism,
+the dHash fingerprint, the `.bin` store round-trip, and an end-to-end matcher
+check (a reference embedded in a record is found at the right offset, including
+many references against one prepared record).
+</content>
+</invoke>
